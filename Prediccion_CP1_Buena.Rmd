@@ -1,0 +1,283 @@
+---
+title: 'Predicción: Práctica 1'
+author: "Marcos Barragán"
+date: "27/10/2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, warning = FALSE, error = FALSE)
+```
+
+## Familiarización con los datos
+
+En esta primera práctica de la asignatura trataremos de implementar un modelo de regresión que permita predecir de manera correcta los salarios de una muestra aleatoria de jugadores de la NBA. Para ello disponemos de una serie de datos que encontramos en [nba.csv](.\Prediccion\nba.csv), compuestos por 485 observaciones de 28 variables diferentes.
+
+EN primer lugar debemos familiarizarnos con las distintas variables de las que disponemos en el DataSet, las cuales son: 
+
++ `Player`: Jugadores a los que se va a considerar en el estudio. 
++ `Salary`: Salarios de los jugadores.
++ `NBA_Country`: País de procedencia de los diferentes jugadores. 
++ `NBA_DraftNumber`: Número del draft del jugador (se puede usar como indicador de la calidad del mismo; los mejores jugadores tienen draft menores).
++ `Age`: Edad de los jugadores. 
++ `Tm`: Equipo en el que juegan. 
++ `G`: Número de partidos en los que han participado. 
++ `MP`: Total de minutos jugados.
++ `PER`: eficiencia de un jugador en base a lo que aporta por minuto jugado. 
++ `TS`: eficiencia en los tiros. 
++ `X3Par`: porcentaje de tiros de triple frente al número de tiros realizado.
++ `FTR`: Número de tiros libres realizados por cada tiro de campo. 
++ `ORB`: Número de rebotes ofensivos cogidos por un jugador sobre el total de los cogidos por el equipo.
++ `DRB`: Número de rebotes defensivos por jugador sobre el total del equipo. 
++ `TRB`: Cantidad de rebotes (en general) capturados por un jugador sobre el total del equipo. 
++ `AST`: Número de asistencias del jugador sobre el total de asistencias del equipo.
++ `STL`: Robos realizados por el total de posesiones del rival. 
++ `BLK`: Número de tapones efectivos sobre el número de tiros de campo intentados por el rival. 
++ `TOV`: Pérdidas cometidas por cada 100 posesiones de balón. 
++ `USG`: Volumen de uso de un jugador dentro de las jugadas ofensivas de su equipo.
++ `OWS`: Victorias gracias a una jugada ofensiva del jugador.
++ `DWS`: Victorias gracias a una jugada defensiva del jugador.
++ `WS`: Victorias en las que un jugador ha contribuido. 
++ `WS.48`: WS ponderado a 48 minutos.
++ `BPM`: Rendimiento de un jugador sobre el rendimiento del equipo por cada 100 posesiones. 
++ `OBPM`: BPM en jugadas ofensivas.
++ `DBPM`: BPM en jugadas defensivas.
++ `VORP`: Impacto que tiene un jugador en comparación al que tiene el equipo por cada 100 posesiones cuando es reemplazado, ponderado a lo largo de 82 partidos.
+
+Si analizamos el tipo de datos con el que estamos tratando, vemos que todas son de tipo numérico, excepto `Player`, `NBA_Country` y `Tm`, que son de tipo _character_. 
+
+```{r, include = FALSE}
+
+nba <- read.csv("nba.csv")
+
+```
+
+```{r, echo = FALSE}
+
+str(nba)
+
+```
+
+Mostraré una tabla con las primeras observaciones de las diferentes variables para el tipo de variables en el dataset.
+
+```{r, echo = FALSE}
+library(knitr)
+
+knitr::kable(nba[1:5,] ,
+        caption = "Una muestra de la tabla de salarios de la NBA que trataremos")
+
+```
+
+Podemos observar la distribución de los datos a través del comando _multi.hist_, que nos devolverá los histogramas de distribución de todas las observaciones. Esto es: 
+
+```{r, include = FALSE}
+library(dplyr)
+require(psych)
+```
+
+```{r, echo = FALSE}
+multi.hist(x = select(nba, -c(Player, NBA_Country, Tm)), dcol = c("blue", "red"), 
+           dlty = c("dotted", "solid"), main = nba$names, ylab = 'Density' )
+```
+
+## Generación de un modelo lineal de ajuste
+
+Una vez hecho una fase previa de visualización y exploración de los datos, podemos pasar al estudio que nos concierne en el trabajo: la generación de un modelo de ajuste para los salarios con respecto al resto de variables. 
+
+En primer lugar implementaré un modelo de ajuste lineal del Salario con respecto a todas las demás observaciones del dataset (excepto aquellas que no son de tipo numérico). Si hacemos eso, obtendremos que los resultados de este primer ajuste son: 
+
+```{r, echo = FALSE}
+
+model <- lm(data = nba, Salary ~ NBA_DraftNumber + Age + G +MP + PER + TS. + X3PAr + FTr + ORB. + DRB. + TRB. + AST. + STL. + BLK. +                                    TOV. + USG. + OWS + DWS + WS + WS.48 + OBPM + DBPM + BPM + VORP)
+
+summary(model)
+
+```
+
+Tras ejecutar el _summary_ del modelo nos fijaremos principalmente en tres factores: 
+
++ Las variables que son especialmente significativas en el mismo son: `NBA_DraftNumber`, `Age`, `G`, `MP`. 
++ El valor de $R^{2}$ ajustado es de $0.5242$, lo que quiere decir que el modelo explica correctamente el $52%$ de los datos.
++ El p-value obtenido en el mismo es de $2.2·10^{-16}$. Un valor tan bajo es indicativo de que los predictores sí están relacionado con la variable a analizar (`Salary`).
+ 
+Al representar los residuos del ajuste llevado a cabo, observamos: 
+
+```{r}
+
+par(mfrow=c(2,2))
+plot(model, scale="adjr2", col='Forestgreen')
+
+```
+
+De los gráficos de _residuals vs fitted_ y, sobre todo, del _qqplot_ vemos que los residuos no se ajustan de una forma adecuada a una normal (condición para poder validar el modelo de regresión lineal), pues deberían aparecer todos sobre la recta que aparece en línea discontinua. 
+
+Si representamos en forma de histograma la distribución de los errores junto con la curva que seguiría una distribución normal, observamos que no siguen para nada la forma de la normal (línea discontinua sobre la gráfica). Más allá de esto, al realizar un test de normalidad de Saphiro-Wilk sobre los residuos del modelo, aparece un $p_{value}=2.98·10^{-8}$, un claro estimador de que debemos rechazar la hipótesis de normalidad de los residuos. 
+Esto nos hace pensar que el modelo no es demasiado bueno, por lo que debemos seleccionar las variables a utilizar en otro modelo, o probar con otro tipo de modelos de ajuste: polinómico, exponencial, etc. Más adelante hablaré sobre ello.
+
+```{r, echo = FALSE}
+
+residplot <- function(fit, nbreaks=16) {
+ z <- rstudent(fit)
+ hist(z, breaks=nbreaks, freq=FALSE,
+ xlab="Studentized Residual",
+ ylim = c(0,0.6),
+ main="Distribución de los errores")
+ rug(jitter(z), col="brown")
+ curve(dnorm(x, mean=mean(z), sd=sd(z)),
+ add=TRUE, col="blue", lwd=2)
+ lines(density(z)$x, density(z)$y,
+ col="red", lwd=2, lty=2)
+ legend("topright",
+ legend = c( "Normal Curve", "Kernel Density Curve"),
+ lty=1:2, col=c("blue","red"), cex=.7)
+ }
+residplot(model)
+
+shapiro.test(model$residuals)
+
+```
+## Selección de variables y construcción de un nuevo modelo
+
+Como el modelo que hemos construido en primer lugar, conteniendo todas las variables numéricas del dataset, no arrojaba unos resultados demasiado buenos, lo que haré será considerar una selección/filtrado de variables para saber cuáles son las que deberían aparecer en la regresión en este caso. Para ello, haré uso del criterio de selección de variables AIC ( _Akaike Information Criterion_). 
+Al ejecutar este método de selección de variables con la opción _both_ (una mezcla entre los modelos _forward_ y _stepwise_) obtenemos como resultado que debemos considerar solamente las variables: `NBA_DraftNumber`, `Age`, `G`, `MP`, `PER`, `X3PAr`, `ORB.`, `TRB.`, `USG`, `WS`, `OBPM`. 
+(No se muestra los resultados numéricos del test puesto que es muy tedioso y no aporta gran información al lector, salvo el resultado final). 
+
+```{r include = FALSE}
+library(MASS)
+```
+
+```{r, include= FALSE}
+stepAIC(model, direction="both")
+```
+
+Construyendo un modelo con los datos de esas columnas únicamente y ejecutándolo tendremos: 
+
+```{r, echo = FALSE} 
+
+model_good <- lm(Salary ~ NBA_DraftNumber + Age + G + MP + PER + X3PAr + ORB. + TRB. + USG. + WS + OBPM, data = nba)
+
+summary(model_good)
+
+```
+
+De los resultados obtenidos se aprecia que ahora hay más variables especialmente significativas; estas son: `NBA_DraftNumber`, `Age`, `G`, `MP`, `WS` y `TRB`. 
+Por otra parte, el valor de $R^{2}$ aumenta hasta $0.5329$, lo cual supone una mejora (aunque no demasiado notoria) sobre el primer modelo. 
+
+#### Análisis de los residuos del modelo 
+
+Podemos representar, de igual forma que en el caso anterior, los gráficos de la distribución de los residuos para este segundo modelo:  
+```{r, echo = FALSE}
+
+par(mfrow=c(2,2))
+plot(model_good, scale="adjr2", col='Forestgreen')
+
+```
+
+En ellos se aprecia que los residuos siguen sin comportarse de una manera normal (cosa que se ve sobre todo en el _qqplot_) ni siguen una distribución más o menos simétrica a ambos lados del 0 del _fittedplot_, si no que parecen agruparse en torno a una zona concreta. Se sigue observando un cierto patrón curvo en la representación de los mismos. Esto, como veremos más adelante, son indicios de heterocedasticidad en los datos de los residuos. 
+Esto lo corroboramos al representar el histograma con los residuos y el saphiro test sobre los mismos, de los cuales se confirma que los residuos no se ajustan a una distribución normal y que el $p_{value}$ del test es muy significante para el rechazo de la misma hipótesis. 
+
+```{r, include = FALSE}
+library(car)
+
+```
+
+```{r, echo = FALSE}
+
+residplot <- function(fit, nbreaks=16) {
+ z <- rstudent(fit)
+ hist(z, breaks=nbreaks, freq=FALSE,
+ xlab="Studentized Residual",
+ ylim = c(0,0.6),
+ main="Distribución de los errores")
+ rug(jitter(z), col="brown")
+ curve(dnorm(x, mean=mean(z), sd=sd(z)),
+ add=TRUE, col="blue", lwd=2)
+ lines(density(z)$x, density(z)$y,
+ col="red", lwd=2, lty=2)
+ legend("topright",
+ legend = c( "Normal Curve", "Kernel Density Curve"),
+ lty=1:2, col=c("blue","red"), cex=.7)
+ }
+residplot(model_good)
+
+shapiro.test(model_good$residuals)
+
+qqPlot(model_good, labels=row.names(states), id.method="identify",
+ simulate=TRUE, main="Q-Q Plot modelo con filtro de variables", xlab="Cuantiles teóricos", ylab = "Residuos")
+```
+#### Análisis de la correlación de los datos del modelo 
+
+Estudiaremos la correlación de este segundo modelo para comprobar si estamos metiendo variables repetidas que no aporten información especialmente relevante para nuestro caso. La graficación de la matriz de correlaciones para los datos de este segundo modelo da: 
+
+```{r, include = FALSE}
+library(corrplot)
+```
+
+```{r, echo = FALSE}
+corrplot(corr = cor(na.omit(nba[ , c("NBA_DraftNumber", "Age","G","MP","PER","X3PAr","ORB.","TRB.","USG.","WS", "OBPM")], 
+                            method = "pearson")), 
+          type = "upper", 
+          bg = "lightyellow", 
+          tl.col = "black", 
+          tl.cex = 0.7, 
+          method = "pie")
+```
+
+Como vemos, las variables `PER`y `OBPM`, así como `G`y `MP` están muy correlacionadas entre sí. Además, si estudiamos los VIF (Factores de Inflación de Varianza) de este segundo modelo obtenemos que, efectivamente, las variables `PER` y `OBPM`son variables problemáticas, pues presentan valores $VIF > 10$. Esto nos lleva a pensar que quizá estén provocando problemas de colinealidad.
+
+```{r}
+
+vif(model_good)
+
+```
+
+Voy a probar a quitar una de esas variables (en concreto la de `OBPM`) y a establecer una relación entre `Age` y `G` para ver cómo afecta eso al modelo de regresión.
+
+```{r} 
+
+model_good2 <- lm(Salary ~ NBA_DraftNumber + Age * G + MP + PER + X3PAr + ORB. + TRB. + USG. + WS , data = nba)
+
+summary(model_good2)
+
+```
+
+Al eliminar la variable `OBPM` se reduce el valor de $R^{2}$ a $0.5309$, una diferencia muy pequeña con respecto al anterior, por lo que podemos pensar que no aporta gran cosa al modelo que estábamos utilizando, pero también que la relación explícita entre las otras dos variables no es demasiado útil. 
+
+#### Análisis de homocedasticidad de residuos
+
+Por último, haré un análisis de homocedasticidad, uno de los criterios necesarios para validar una regresión o ajuste lineal. Para ello utilizaré el test de Breusch-Pagan, cuya hipótesis nula establece que los residuos presentan homocedasticidad.
+
+```{r, include = FALSE}
+library(lmtest)
+```
+
+```{r, echo = FALSE}
+bptest(model_good)
+```
+
+El $p_{value}=4.23·10^{-9}$ nos lleva a desechar la hipótesis nula y a considerar que los residuos no cumplen con la homocedasticidad. Se incumple, por tanto, otra de las características necesarias para los ajustes de regresión lineal. 
+
+
+## Predicción de los salarios a través del modelo de regresión creado
+
+Una vez hemos hecho todas las consideraciones previas, procederé a estimar el salario de los diferentes jugadores en base a los modelos seleccionados. 
+
+Para ello, haré uso de la función _predict_ de R, que permite introducir el modelo y los datos sobre los que predecir. 
+
+```{r, echo = FALSE}
+
+nba$Prediccion <- predict(na.omit(model), newdata = nba)
+nba$Prediccion_con_OBPM <- predict(na.omit(model), newdata = nba)
+nba$Prediccion_sin_OBPM <- predict(na.omit(model_good2), newdata = nba)
+
+```
+
+En la columna de `Prediccion` se muestran las predicciones de salario para el primer modelo de ajuste; en la de `Prediccion_con_OBPM` se muestra el valor de las predicciones para el caso del segundo ajuste (tras la selección), mientras que en la columna `Prediccion_sin_OBPM` se muestran las predicciones del tercer modelo de regresión. 
+
+A la vista de algunos resultados de la predicción del salario (que aparecen algunos incluso negativos) junto con todas las características vistas sobre el modelo de regresión lineal, podemos concluir que el ajuste de estos modelos no es bueno. Para hacerlo correctamente, deberíamos implementar un modelo de regresión polinómico, exponencial, etc. pero cualquiera que no fuese lineal, pues incumple los tres criterios necesarios para ello: 
+
++ Los residuos no siguen una distribución normal.
++ No son homocedásticos.
++ Todo apunta a que también son multicolineales. 
+
+Más adelante y conociendo las técnicas de otros tipos de ajuste podría mejorarse el resultado del análisis de los salarios de la NBA en base al resto de variables de ese dataset. 
