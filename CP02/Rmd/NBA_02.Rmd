@@ -1,0 +1,371 @@
+---
+title: "NBA fitting Lasso"
+author: "Marcos Barragán"
+date: "1/11/2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(tidyverse)
+library(janitor) # Clean names
+library(skimr) # Beautiful Summarize
+library(magrittr) # Pipe operators
+library(corrplot) # Correlations
+library(ggcorrplot)  # Correlations
+library(PerformanceAnalytics)
+library(leaps) # Model selection
+library(rsample)
+library(boot)
+library(glmnet)
+library(dplyr)
+
+```
+
+Cargamos los datos de la NBA. 
+
+```{r}
+
+nba_data <- read.csv("nba.csv")
+
+nba_data %<>% clean_names()
+colnames(nba_data)
+
+```
+
+```{r}
+
+skim(nba_data)
+
+```
+
+Vamos a borrar los NA y los datos duplicados:
+
+```{r}
+
+nba_data %<>% distinct(player, .keep_all = TRUE)
+
+nba_data %<>% drop_na()
+
+skim(nba_data)
+
+```
+
+Si representamos el comportamiento de las diferentes variables en función de la variable target con la que queremos comparar (`Salary`), veremos unas distribuciones similares a:
+```{r, fig.width=9,fig.height=25}
+
+nba_data %>% 
+  select_at(vars(-c("player","nba_country","tm"))) %>% 
+  tidyr::gather("id", "value", 2:25) %>% 
+  ggplot(. , aes(y = log(salary), x = value)) +
+  geom_point() +
+  geom_smooth(method = "lm", se = FALSE, color = "black") +
+  facet_wrap(~id, ncol = 2, scales = "free_x")
+
+```
+
+Como vemos, el comportamiento en la mayoría de casos es muy alejado de un comportamiento lineal para con esa variable. Si introducimos una transformación en el target y la convertimos a escala logarítmica, veremos que mejoran ligeramente esos comportamientos:
+
+```{r, fig.width=9,fig.height=25}
+
+nba_data %>% 
+  select_at(vars(-c("player","nba_country","tm"))) %>% 
+  tidyr::gather("id", "value", 2:25) %>% 
+  ggplot(. , aes(y = log(salary), x = value)) +
+  geom_point() +
+  geom_smooth(method = "lm", se = FALSE, color = "black") +
+  facet_wrap(~id, ncol = 2, scales = "free_x")
+
+```
+
+A partir de aquí trabajaremos con la base de datos que contenga el salario en escala logarítmica. 
+
+```{r}
+
+log_nba <- nba_data %>% 
+  mutate(salary = log(salary))
+
+```
+
+Podemos estudiar dónde se encuentran las relaciones más fuertes y evidentes entre las variables; para ello, implementaré el cálculo de la matriz de correlaciones de las diferentes variables entre sí (con `salary` en logaritmos): 
+
+```{r, fig.width=9,fig.height=9}
+
+corrplot(cor(log_nba %>% 
+               select_at(vars(- c("player", "nba_country", "tm")))),
+         method = "pie", 
+         type = "lower",
+         tl.col = "black")
+         
+
+```
+
+Podría haber sido útil, en un principio, graficar las dispersiones entre variables junto con los valores de correlación más significativos. Esto lo conseguimos a través del comando _chart.Correlation_:
+
+```{r, fig.width=12, fig.height=15}
+
+chart.Correlation(log_nba %>% 
+                    select_at(vars(-c("player", "nba_country", "tm"))), 
+                  histogram = TRUE)
+
+```
+
+### Análisis de los valores del VIF.
+
+Una vez hemos llevado a cabo un pequeño análisis descriptivo de las principales características y relaciones de las variables frente al target, podemos analizar el factor de inflación de la varianza (o **VIF`**), que nos dará información sobre la posible colinalidad de los datos. 
+
+```{r}
+
+VIF_nba <- lm(salary~.-player-nba_country-tm, data = log_nba)
+
+valores <- car::vif(VIF_nba)
+
+knitr::kable(valores)
+```
+
+A la vista de los resultados del VIF que aparecen en la tabla, se ve como hay algunos valores desorbitados. En particular, son especialmente preocupantes los valores de: `per`, `orb`, `drb`, `trb`, `ows`, `dws`, `ws`, `obpm`, `dbpm`, `bpm`. 
+
+### Selección de un modelo: 
+
+Lo primero que haré a continuación será eliminar del dataframe `log_nba` todas las variables que son categóricas (`Player`, `Nba_Counry` y `tm`).
+
+```{r}
+
+log_nba <- log_nba %>%
+                  select_at(vars(-c("player","nba_country", "tm")))
+
+set.seed(1234)
+
+num_datos <- nrow(log_nba)
+
+num_datos_test <- 10
+
+prueba = sample(num_datos ,
+                num_datos - num_datos_test)
+
+datos_prueba <- log_nba[prueba, ]
+
+datos_test <- log_nba[-prueba, ]
+
+modelo <- regsubsets(salary~., 
+                     data = datos_prueba, 
+                     method = 'seqrep', 
+                     nvmax = 24)
+
+resumen_modelo <- summary(modelo)
+
+data.frame(
+  R2 = (resumen_modelo$adjr2),
+  CP = (resumen_modelo$cp),
+  BIC = (resumen_modelo$bic)
+)
+
+resumen_modelo$outmat
+```
+
+Dentro de los modelos que escojamos, debemos tener en cuenta que los ajustes serán mejores a medida que $R^{2}$ sea mayor, pero CP y BIC sean menores. 
+
+De acuerdo con esto, el modelo que deberíamos escoger en función del $R^{2}$, CP y BIC serían, respectivamente: 
+
+```{r}
+
+data.frame(
+  Adj.R2 = which.max(resumen_modelo$adjr2),
+  CP = which.min(resumen_modelo$cp),
+  BIC = which.min(resumen_modelo$bic)
+)
+
+```
+
+```{r}
+
+mejorR2 <- coef(modelo, which.max(resumen_modelo$adjr2))
+mejorCP <- coef(modelo, which.min(resumen_modelo$cp))
+mejorBIC <- coef(modelo, which.min(resumen_modelo$bic))
+
+```
+
+Para el caso del ajuste por $R^{2}$ tenemos que las variables que deberíamos considerar son: `nba_draft_number`, `age`, `g`, `mp`, `per`, `ts`, `f_tr`, `trb`, `ast`, `tov`, `usg`, `dws`, `ws_48`, `dbpm`. 
+
+En el caso del ajuste por CP: `nba_draft_number`, `age`, `g`. `mp`, `per`, `ts`, `trb`, `ast`, `tov`, `usg`, `dws`, `ws_48`, `dbpm`. 
+
+Por último, en el caso del BIC: `nba_draft_number`, `age`, `mp` y `drb`. 
+
+#### Estudio de los modelos: 
+
+Vamos a implementar los diferentes análisis de los modelos linales en función de cada uno de los métodos seleccionados: 
+
+```{r}
+
+CPnba <- lm(salary ~ nba_draft_number + age + mp + per + ts + trb + ast + tov + usg + dws +ws_48 + dbpm, data = datos_prueba)
+
+BICnba <- lm(salary ~ nba_draft_number + age + mp + drb, data = datos_prueba)
+
+R2nba <- lm(salary ~ nba_draft_number + age + mp + per + ts + f_tr + trb + ast + tov + usg + dws +ws_48 + dbpm, data = datos_prueba)
+
+```
+
+
+```{r}
+
+R2prediccion <- predict(R2nba, newdata = datos_test)
+CPprediccion <- predict(CPnba, newdata = datos_test)
+BICprediccion <- predict(BICnba, newdata = datos_test)
+
+cbind(datos_test$salary, R2prediccion, CPprediccion, BICprediccion)
+data.frame(Salarios = exp(datos_test$salary), Prediccion_R2 = exp(R2prediccion), Prediccion_CP = exp(CPprediccion), Prediccion_BIC = exp(BICprediccion))
+
+```
+
+## Validaciones del modelo 
+
+### Elastic Net: 
+
+Queremos implementar un modelo elastic net para validar nuestras predicciones y variables escogidas. Para ello, deberemos escoger aquellos valores que $\alpha$ que minimicen el valor de $\lambda$. Esto lo conseguimos creando variables vacías e iterando en un bucle para ir rellenándolas con los valores de $\lambda$. 
+
+```{r}
+
+set.seed(123)
+
+ames_split <- initial_split(AmesHousing::make_ames(), prop = .7, strata = "Sale_Price")
+ames_train <- training(ames_split)
+ames_test  <- testing(ames_split)
+
+```
+
+Dividimos los datos en dos muestras: una para hacer el training del modelo y otra para evaluar (testing) el mismo.
+
+```{r}
+
+set.seed(123)
+
+splitted_nba <- initial_split(log_nba, prop = 0.7, strata = 'salary')
+
+nba_prueba <- training(splitted_nba)
+
+nba_test <- testing(splitted_nba)
+
+dim(nba_prueba)
+dim(nba_test)
+
+```
+
+Comprobamos que tienen las mismas dimensiones para las columnas (es necesario que así sea).
+
+En este punto es muy importante asegurarnos de que en los datos que le introducimos al _model.matrix_ __no haya variables categóricas__, pues si no (como a mi me ocurría en un principio) no coincidirán nunca las dimensiones, ya que _model.matrix_ crea variables dummies por sí misma; si dejamos las categóricas no va a funcionar. 
+
+```{r}
+
+#Eliminamos la pendiente:
+
+nba_train_x <- model.matrix(salary ~., data = nba_prueba)[, -1]
+
+nba_train_y <- nba_prueba$salary
+
+nba_test_x <- model.matrix(salary ~., data = nba_test)[, -1]
+
+nba_test_y <- nba_test$salary
+
+#Calculamos las dimensiones: 
+
+dim(nba_test_x)
+dim(nba_train_x)
+
+```
+
+Nos aseguramos de que tienen las mismas dimensiones __en las columnas__. 
+
+Creamos la _net_ para la evaluación de los modelos haciendo un _tunning_ para la elección de $\lambda$ y $\alpha$ a través del bucle de las diapositivas de clase:
+
+```{r}
+
+fold_id <- sample(1:10, size = length(nba_train_y), replace = TRUE)
+
+tuning_grid <- tibble::tibble(
+  alpha      = seq(0, 1, by = .1),
+  mse_min    = NA,
+  mse_1se    = NA,
+  lambda_min = NA,
+  lambda_1se = NA
+)
+
+for (i in seq_along(tuning_grid$alpha)) {
+  
+  fit <- cv.glmnet(nba_train_x, nba_train_y, alpha = tuning_grid$alpha[i], foldid = fold_id)
+  
+  # extract MSE and lambda values
+  tuning_grid$mse_min[i]    <- fit$cvm[fit$lambda == fit$lambda.min]
+  tuning_grid$mse_1se[i]    <- fit$cvm[fit$lambda == fit$lambda.1se]
+  tuning_grid$lambda_min[i] <- fit$lambda.min
+  tuning_grid$lambda_1se[i] <- fit$lambda.1se
+}
+
+tuning_grid
+
+```
+
+De la tabla obtenida anteriormente, se ve cómo el mejor modelo es el que presenta $\alpha = 1$ es el mejor (recordemos que el modelo $\alpha = 1$ es el modelo Lasso). Podemos hacer un plot con los diferentes modelos junto con su desviación estándar para ver lo que ocurre al escoger los valores de $\alpha$ y $\lambda$:
+
+```{r}
+
+tuning_grid %>%
+  mutate(se = mse_1se - mse_min) %>%
+    ggplot(aes(alpha, mse_min)) +
+      geom_line(size = 2, color = 'Deepskyblue') +
+      geom_ribbon(aes(ymax = mse_min + se, ymin = mse_min - se), alpha = .15, fill = 'navy', color = 'navy') +
+      ggtitle("MSE ± one standard error")
+
+```
+
+Estamos representando los diferentes valores de $\alpha$ y $\lambda$ junto con un intervalo de confianza que nos ha proporcionado el bucle para el `MSE`. Vemos que, en principio, todos los valores se encuentran dentro de dicho intervalo. 
+
+## Predicción
+
+A continuación, implementaré los diferentes modelos que he obtenido a lo largo de la práctica para realizar una predicción sobre los datos.
+
+```{r}
+
+cv_alpha1 <- cv.glmnet(nba_train_x, nba_train_y, alpha = 1)
+
+min(cv_alpha1$cvm)
+
+#Probaremos con otro alpha, pues a partir de 0.5 el error no cambia de forma considerable.
+
+cv_alpha06 <- cv.glmnet(nba_train_x, nba_train_y, alpha = 0.6)
+
+min(cv_alpha06$cvm)
+
+```
+
+Efectivamente, vemos como los errores no son muy diferentes para ambos casos de $\alpha$.
+
++ Para el caso de $\alpha = 0.6$: 
+
+```{r}
+
+
+prediccion <- predict(cv_alpha06, s = cv_alpha06$lambda.min, nba_test_x)
+
+nba_test$Prediccion <- exp(prediccion)
+
+mean((nba_test_y - prediccion)^2)
+
+
+```
+
++ Para el caso de $\alpha = 1$: 
+
+```{r}
+
+
+prediccion_alpha1 <- predict(cv_alpha1, s = cv_alpha1$lambda.min, nba_test_x)
+
+nba_test$Prediccion_alpha1 <- exp(prediccion_alpha1)
+
+mean((nba_test_y - prediccion_alpha1)^2)
+
+
+```
+
+Efectivamente, como se veía en la gráfica, tenemos que los valores 
