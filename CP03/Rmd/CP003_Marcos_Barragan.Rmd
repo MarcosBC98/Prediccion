@@ -1,0 +1,542 @@
+---
+title: "CP03_Marcos_Barragan"
+author: "Marcos Barragán"
+date: "5/11/2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r, include=FALSE}
+
+library(mgcv)
+library(broom)
+library(ggplot2)
+library(knitr)
+library(boot)
+library(imputeTS)
+library(dplyr)
+library(skimr)
+
+```
+
+
+Lo primero que haré será cargar los datos necesarios para la realización de la práctica. Las diferentes variables que se encuentran dentro del mismo son: 
+
++ `Overall` Science Score (average score for 15 year olds)
++ `Issues` 
++ `Explain`
++ `Evidence`
++ `Interest` in science
++ `Support` for scientific inquiry
++ `Income` Index
++ `Health` Index
++ `Edu` Index
++ `HDI`: Human Development Index (Compuesto a su vez por Income index, Health Index y Education Index)
+
+Si hacemos una primera visualización de los mismos: 
+
+```{r, echo = FALSE}
+
+datos <- read.csv("pisasci2006.csv")
+
+head(datos, 5)
+
+```
+
+Vemos que hay algunas columnas con NA. Se me ocurrieron dos soluciones para este problema de valores nulos: 
+
+- O bien quitar todas aquellas filas que contengan al menos un NA (con lo que nos estaríamos cargando un 20% de los datos)
+- O bien filtrar de alguna manera las filas de países con algún NA. 
+
+Optando por la segunda finalmente, lo que haré será eliminar aquellas filas que contengan más datos NA que datos buenos. De esta manera, eliminaré del dataset los países: Albania, Kazakhstan, Panamá, Perú, Shangai-China, Singapur, Trinidad y Tobago, y los Emiratos Árabes Unidos. El resto de países que contienen valores NA los sustituiré por la media de los datos de la columna en la que se encuentren. Esto nos beneficia, pues no perdemos tantos elementos del dataset como hubiera ocurrido al eliminar "a lo bruto" todos los datos NA del mismo.  
+
+
+```{r}
+
+datos <- datos[-c(1, 29, 42, 43, 50, 51, 59, 62), ]
+
+datos <- na_mean(datos)
+
+head(datos, 5)
+
+```
+
+Podemos averiguar algo más de las propiedades estadísticas de los datos con los que estamos tratando al ejecutar el comando _skim_ sobre los mismos, que además nos esboza un pequeño histograma con la distribución de los datos. 
+
+```{r}
+
+skim(datos)
+
+```
+
+Si representamos las diferentes variables del dataset frente a la variable target `Overall` sobre la que queremos llevar a cabo el estudio, podremos estimar el comportamiento de las mismas entre ellas y para con el target. 
+
+```{r}
+
+par(mfrow = c(3,3))
+
+plot(datos$Overall, datos$Issues, col = 'Yellow2')
+plot(datos$Overall, datos$Explain, col = 'Red')
+plot(datos$Overall, datos$Evidence, col = 'Deepskyblue')
+plot(datos$Overall, datos$Interest, col = 'Magenta')
+plot(datos$Overall, datos$Support, col = 'Navy')
+plot(datos$Overall, datos$Income, col = 'Black')
+plot(datos$Overall, datos$Health, col = 'Green')
+plot(datos$Overall, datos$Edu, col = 'Orange')
+plot(datos$Overall, datos$HDI, col = 'Grey2')
+
+```
+
+A la vista de las gráficas, podemos comprobar que el comportamiento de la variable `Overall` es lineal con `Issues`, con `Explain` y con `Evidence`. No obstante, en el enunciado nos dicen que las variables clave (las que deberíamos utilizar) y estas tres anteriores no están entre ellas, por lo que, de aquí en adelante, prescindiré de ellas y me centraré en las demás columnas. 
+
+A continuación estimaré unos modelos de ajuste sobre `Overall` del resto de variables, con el fin de obtener el mejor modelo de ajuste para cada una de ellas y estimar, además, el número de grados de libertad que deberíamos considerar en cada uno de los modelos. Esto lo implementaré a partir de la función _smooth.spline_ que se encuentra dentro del paquete _gvcm_. Este método lleva a cabo una serie de cross validations en su interior, que es lo que le permite discernir entre los mejores parámetros para cada modelo de ajuste. 
+
+```{r}
+
+interest_overall <- smooth.spline(datos$Interest, datos$Overall, cv = TRUE)
+interest_overall
+
+support_overall <- smooth.spline(datos$Support, datos$Overall, cv = TRUE)
+support_overall
+
+income_overall <- smooth.spline(datos$Income, datos$Overall, cv = TRUE)
+income_overall
+
+health_overall <- smooth.spline(datos$Health, datos$Overall, cv = TRUE)
+health_overall
+
+edu_overall <- smooth.spline(datos$Edu, datos$Overall, cv = TRUE)
+edu_overall
+
+HDI_overall <- smooth.spline(datos$HDI, datos$Overall, cv = TRUE)
+HDI_overall
+
+kable(cbind(interest_overall$df, support_overall$df, income_overall$df, health_overall$df, edu_overall$df, HDI_overall$df), 
+      col.names = c('df interest', 'df support', 'df income', 'df health','df edu','df HDI'))
+
+#Si los redondeamos: 
+
+kable(cbind(round(interest_overall$df, 0), round(support_overall$df,0), round(income_overall$df, 0), round(health_overall$df, 0), round(edu_overall$df, 0), round(HDI_overall$df,0)), col.names = c('df interest', 'df support', 'df income', 'df health','df edu','df HDI'))
+
+```
+
+Vemos que, en general, no son valores muy altos. 
+
+Una vez hecho lo anterior, pasaré a desarrollar un análisis de ajuste de las variables a través del uso de splines mediante un modelo GAM aditivo. En un primer modelo, incluiré splines en todas las variables clave que nos indican en el enunciado. 
+
+```{r}
+
+modelo_splines <- gam(Overall ~ s(Interest) + s(Support) + s(Income) + s(Health) + s(Edu) + s(HDI), data = datos)
+
+plot(modelo_splines, residuals = TRUE, pch = 1)
+
+gam.check(modelo_splines)
+
+```
+
+Una vez hecho el primer modelo general, con splines en todas las variables, podemos pasar a hacer un segundo modelo en el que estimemos diferentes consideraciones en el ajuste de las variables. Si estudiamos el comportamiento del ajuste tipo gam para cada variable de las que hemos incluido anteriormente, veremos algo como: 
+
+```{r, fig.width=10, fig.height=10}
+
+par(mfrow = c(3,2))
+
+plot(gam(Overall ~ s(HDI), data = datos))
+plot(gam(Overall ~ s(Edu), data = datos ))
+plot(gam(Overall ~ s(Health), data = datos))
+plot(gam(Overall ~ s(Support), data = datos))
+plot(gam(Overall ~ s(Income), data = datos ))
+plot(gam(Overall ~ s(Interest), data = datos))
+
+```
+
+De las gráficas vemos que el comportamiento del ajuste de las variables `Health`, `Support` y `HDI` es prácticamente lineal. Teniendo esto en cuenta, lo que haré para estimar este segundo modelo, será eliminar los ajustes con splines para esas tres variables (por ahorrar también coste computacional). De esta manera, el segundo modelo será: 
+
+
+```{r}
+
+modelo_sin_splines <- gam(Overall ~ s(Interest) + Support + s(Income) + Health + s(Edu) + HDI, data = datos)
+
+modelo_sin_splines
+
+par(mfrow = c(1, 3))
+plot(modelo_sin_splines, residuals = TRUE, pch = 1, col =  'forestgreen')
+
+gam.check(modelo_sin_splines)
+ 
+
+```
+
+Otro modelo podría salir de especificarle a aquellas variables que he dejado con spline los grados de libertad redondeados que he obtenido en el paso del _smooth.spline_ (que son los óptimos para cada ajuste). En este caso: 
+
++ `Interest`: 5
++ `Income`: 4
++ `Edu`: 4
+
+Con esto, tendremos: 
+
+
+```{r, include = FALSE}
+
+library(gam)
+
+```
+
+He tenido que cargar la librería _gam_ porque si no me daba problemas a la hora de evaluar un modelo introduciendo manualmente los grados de libertad. 
+
+```{r}
+
+modelo_df_manuales <- gam::gam(Overall ~ s(Interest, df = 5) + Support + s(Income, df = 4) + Health + s(Edu, df = 4) + HDI, data = datos)
+
+modelo_df_manuales
+
+```
+
+
+Tras haber desarrollado esos dos modelos, estimaré un modelo más, consistente en incluir ajustes polinómicos a las variables. Para ello:  
+
++ Estudiaré los diferentes ajustes polinómicos de las variables.
++ Estimaré los errores asociados a cada uno de ellos. 
++ Finalmente, me quedaré con aquel modelo con menor error de ajuste asociado. 
+
+Esto es: 
+
+a) `Income`: en esta variable, nos vamos a encontrar que el polinomio de ajuste que menor error cometería sería el de grado 2. No obstante, el error entre el de grado 1 y el de grado 2 es similar, por lo que podríamos quedarnos con el de primer grado. 
+
+```{r}
+
+cv.error <- rep(NA, 5)
+rss <- rep(NA, 5)
+
+for (i in 1:5) {
+
+        modelo.poli <- glm(Overall ~ poly(Income, i), data = datos)
+        cv.error[i] <- cv.glm(datos, modelo.poli)$delta[1]
+        rss[i] <- sum(modelo.poli$residuals^2)
+     
+}
+
+which.min(cv.error)
+
+ggplot(data = data.frame(polinomio = 1:5, cv.error = cv.error), 
+        aes(x = polinomio, y = cv.error)) +
+        
+        geom_point(color = "orangered2") +
+        geom_path() +
+        scale_x_continuous(breaks = 0:5) +
+        labs(title = "cv.MSE  ~ Grado de polinomio") +
+        theme_bw() +
+        theme(panel.background = element_blank(), panel.grid.major = element_blank(), panel.grid.minor = element_blank()) +
+        theme(plot.title = element_text(hjust = 0.5))
+
+ggplot(data = data.frame(polinomio = 1:5, RSS = rss), 
+       aes(x = polinomio, y = RSS)) +
+        
+     geom_point(color = "orangered2") +
+     geom_path() +
+     scale_x_continuous(breaks = 0:5) +
+     labs(title = "RSS  ~ Grado de polinomio") +
+     theme_bw() +
+     theme(panel.background = element_blank(), panel.grid.major = element_blank(), panel.grid.minor = element_blank()) +
+     theme(plot.title = element_text(hjust = 0.5))
+
+ggplot(data = datos, aes(x = Income, y = Overall)) +
+     geom_point(col = "darkgrey") +
+     geom_smooth(method = "lm", formula = y ~ poly(x, 2), color = "blue", se = TRUE, level = 0.95) +
+     labs(title = "Polinomio grado 2: Overall ~ Income") +
+     theme_bw() + theme(plot.title = element_text(hjust = 0.5))
+
+```
+
+En las siguientes gráficas no mostraré el código, pues es una repetición del anterior.
+
+b) `Interest`:
+
+```{r, echo = FALSE}
+
+cv.error <- rep(NA, 5)
+rss <- rep(NA, 5)
+
+for (i in 1:5) {
+
+        modelo.poli <- glm(Overall ~ poly(Interest, i), data = datos)
+        cv.error[i] <- cv.glm(datos, modelo.poli)$delta[1]
+        rss[i] <- sum(modelo.poli$residuals^2)
+     
+}
+
+
+ggplot(data = data.frame(polinomio = 1:5, cv.error = cv.error), 
+        aes(x = polinomio, y = cv.error)) +
+        
+        geom_point(color = "orangered2") +
+        geom_path() +
+        scale_x_continuous(breaks = 0:5) +
+        labs(title = "cv.MSE  ~ Grado de polinomio") +
+        theme_bw() +
+        theme(panel.background = element_blank(), panel.grid.major = element_blank(), panel.grid.minor = element_blank()) +
+        theme(plot.title = element_text(hjust = 0.5))
+
+ggplot(data = data.frame(polinomio = 1:5, RSS = rss), 
+       aes(x = polinomio, y = RSS)) +
+        
+     geom_point(color = "orangered2") +
+     geom_path() +
+     scale_x_continuous(breaks = 0:5) +
+     labs(title = "RSS  ~ Grado de polinomio") +
+     theme_bw() +
+     theme(panel.background = element_blank(), panel.grid.major = element_blank(), panel.grid.minor = element_blank()) +
+     theme(plot.title = element_text(hjust = 0.5))
+```
+
+Vemos que el polinomio que mejor ajusta es el de grado 5. Sin embargo, se puede apreciar en la gráfica de error cometido por los ajustes polinómicos que el de grado 3 disminuye bastante el error y tiene un coste computacional menor que el de grado 5. Además, si hacemos un ajuste de grado 5 podríamos estar incurriendo en _overfitting_ de los datos. Por ello, en este caso, me quedo con el polinomio cúbico como ajuste. 
+
+```{r, echo = FALSE}
+
+ggplot(data = datos, aes(x = Interest, y = Overall)) +
+     geom_point(col = "darkgrey") +
+     geom_smooth(method = "lm", formula = y ~ poly(x, 3), color = "blue", se = TRUE, level = 0.95) +
+     labs(title = "Polinomio grado 3: Overall ~ Interest") +
+     theme_bw() + theme(plot.title = element_text(hjust = 0.5))
+
+
+```
+
+c) `Edu`: 
+
+```{r, echo = FALSE}
+
+cv.error <- rep(NA, 5)
+rss <- rep(NA, 5)
+
+for (i in 1:5) {
+
+        modelo.poli <- glm(Overall ~ poly(Edu, i), data = datos)
+        cv.error[i] <- cv.glm(datos, modelo.poli)$delta[1]
+        rss[i] <- sum(modelo.poli$residuals^2)
+     
+}
+
+
+ggplot(data = data.frame(polinomio = 1:5, cv.error = cv.error), 
+        aes(x = polinomio, y = cv.error)) +
+        
+        geom_point(color = "orangered2") +
+        geom_path() +
+        scale_x_continuous(breaks = 0:5) +
+        labs(title = "cv.MSE  ~ Grado de polinomio") +
+        theme_bw() +
+        theme(panel.background = element_blank(), panel.grid.major = element_blank(), panel.grid.minor = element_blank()) +
+        theme(plot.title = element_text(hjust = 0.5))
+
+ggplot(data = data.frame(polinomio = 1:5, RSS = rss), 
+       aes(x = polinomio, y = RSS)) +
+        
+     geom_point(color = "orangered2") +
+     geom_path() +
+     scale_x_continuous(breaks = 0:5) +
+     labs(title = "RSS  ~ Grado de polinomio") +
+     theme_bw() +
+     theme(panel.background = element_blank(), panel.grid.major = element_blank(), panel.grid.minor = element_blank()) +
+     theme(plot.title = element_text(hjust = 0.5))
+```
+
+Como ocurróia con `Interest`, me quedo con el ajuste cúbico de `Edu`, obteniendo una gráfica del ajuste como: 
+
+```{r, echo = FALSE}
+
+ggplot(data = datos, aes(x = Edu, y = Overall)) +
+     geom_point(col = "darkgrey") +
+     geom_smooth(method = "lm", formula = y ~ poly(x, 3), color = "blue", se = TRUE, level = 0.95) +
+     labs(title = "Polinomio grado 3: Overall ~ Edu") +
+     theme_bw() + theme(plot.title = element_text(hjust = 0.5))
+```
+
+```{r, echo = FALSE}
+
+cv.error <- rep(NA, 5)
+rss <- rep(NA, 5)
+
+for (i in 1:5) {
+
+        modelo.poli <- glm(Overall ~ poly(Support, i), data = datos)
+        cv.error[i] <- cv.glm(datos, modelo.poli)$delta[1]
+        rss[i] <- sum(modelo.poli$residuals^2)
+     
+}
+
+ggplot(data = data.frame(polinomio = 1:5, cv.error = cv.error), 
+        aes(x = polinomio, y = cv.error)) +
+        
+        geom_point(color = "orangered2") +
+        geom_path() +
+        scale_x_continuous(breaks = 0:5) +
+        labs(title = "cv.MSE  ~ Grado de polinomio") +
+        theme_bw() +
+        theme(panel.background = element_blank(), panel.grid.major = element_blank(), panel.grid.minor = element_blank()) +
+        theme(plot.title = element_text(hjust = 0.5))
+
+ggplot(data = data.frame(polinomio = 1:5, RSS = rss), 
+       aes(x = polinomio, y = RSS)) +
+        
+     geom_point(color = "orangered2") +
+     geom_path() +
+     scale_x_continuous(breaks = 0:5) +
+     labs(title = "RSS  ~ Grado de polinomio") +
+     theme_bw() +
+     theme(panel.background = element_blank(), panel.grid.major = element_blank(), panel.grid.minor = element_blank()) +
+     theme(plot.title = element_text(hjust = 0.5))
+
+```
+
+```{r, echo = FALSE}
+
+ggplot(data = datos, aes(x = Support, y = Overall)) +
+     geom_point(col = "darkgrey") +
+     geom_smooth(method = "lm", formula = y ~ poly(x, 1), color = "blue", se = TRUE, level = 0.95) +
+     labs(title = "Polinomio grado 1: Overall ~ Support") +
+     theme_bw() + theme(plot.title = element_text(hjust = 0.5))
+
+```
+
+```{r, echo = FALSE}
+
+cv.error <- rep(NA, 5)
+rss <- rep(NA, 5)
+
+for (i in 1:5) {
+
+        modelo.poli <- glm(Overall ~ poly(Health, i), data = datos)
+        cv.error[i] <- cv.glm(datos, modelo.poli)$delta[1]
+        rss[i] <- sum(modelo.poli$residuals^2)
+     
+}
+
+ggplot(data = data.frame(polinomio = 1:5, cv.error = cv.error), 
+        aes(x = polinomio, y = cv.error)) +
+        
+        geom_point(color = "orangered2") +
+        geom_path() +
+        scale_x_continuous(breaks = 0:5) +
+        labs(title = "cv.MSE  ~ Grado de polinomio") +
+        theme_bw() +
+        theme(panel.background = element_blank(), panel.grid.major = element_blank(), panel.grid.minor = element_blank()) +
+        theme(plot.title = element_text(hjust = 0.5))
+
+ggplot(data = data.frame(polinomio = 1:5, RSS = rss), 
+       aes(x = polinomio, y = RSS)) +
+        
+     geom_point(color = "orangered2") +
+     geom_path() +
+     scale_x_continuous(breaks = 0:5) +
+     labs(title = "RSS  ~ Grado de polinomio") +
+     theme_bw() +
+     theme(panel.background = element_blank(), panel.grid.major = element_blank(), panel.grid.minor = element_blank()) +
+     theme(plot.title = element_text(hjust = 0.5))
+
+```
+
+```{r, echo = FALSE}
+
+ggplot(data = datos, aes(x = Health, y = Overall)) +
+     geom_point(col = "darkgrey") +
+     geom_smooth(method = "lm", formula = y ~ poly(x, 1), color = "blue", se = TRUE, level = 0.95) +
+     labs(title = "Polinomio grado 1: Overall ~ Health") +
+     theme_bw() + theme(plot.title = element_text(hjust = 0.5))
+
+```
+
+```{r, echo = FALSE}
+
+cv.error <- rep(NA, 5)
+rss <- rep(NA, 5)
+
+for (i in 1:5) {
+
+        modelo.poli <- glm(Overall ~ poly(HDI, i), data = datos)
+        cv.error[i] <- cv.glm(datos, modelo.poli)$delta[1]
+        rss[i] <- sum(modelo.poli$residuals^2)
+     
+}
+
+ggplot(data = data.frame(polinomio = 1:5, cv.error = cv.error), 
+        aes(x = polinomio, y = cv.error)) +
+        
+        geom_point(color = "orangered2") +
+        geom_path() +
+        scale_x_continuous(breaks = 0:5) +
+        labs(title = "cv.MSE  ~ Grado de polinomio") +
+        theme_bw() +
+        theme(panel.background = element_blank(), panel.grid.major = element_blank(), panel.grid.minor = element_blank()) +
+        theme(plot.title = element_text(hjust = 0.5))
+
+ggplot(data = data.frame(polinomio = 1:5, RSS = rss), 
+       aes(x = polinomio, y = RSS)) +
+        
+     geom_point(color = "orangered2") +
+     geom_path() +
+     scale_x_continuous(breaks = 0:5) +
+     labs(title = "RSS  ~ Grado de polinomio") +
+     theme_bw() +
+     theme(panel.background = element_blank(), panel.grid.major = element_blank(), panel.grid.minor = element_blank()) +
+     theme(plot.title = element_text(hjust = 0.5))
+
+```
+
+```{r, echo = FALSE}
+
+ggplot(data = datos, aes(x = HDI, y = Overall)) +
+     geom_point(col = "darkgrey") +
+     geom_smooth(method = "lm", formula = y ~ poly(x, 1), color = "blue", se = TRUE, level = 0.95) +
+     labs(title = "Polinomio grado 1: Overall ~ HDI") +
+     theme_bw() + theme(plot.title = element_text(hjust = 0.5))
+
+```
+
+Hemos analizado cuáles serían los modelos que menor error cometen a la hora de hacer el ajuste de las variables frente a `Overall`.
+
+Por tanto, el último modelo de ajuste, lo haremos de la siguiente manera: 
+
++ Lineal para: `Support`, `Health`y `HDI`
++ Polinómico: 
+
+        - Grado 3: para `Edu` e `Interest`.
+        - Grado 2: para `Income`. 
+
+```{r, echo = FALSE}
+
+modelo_3 <- lm(Overall ~ Support + Health + HDI + poly(Income, 2) + poly(Interest, 3) + poly(Edu, 3), data = datos)
+
+modelo_3
+
+plot(modelo_3, residuals = TRUE, pch = 1)
+
+summary(modelo_3)
+
+```
+
+```{r}
+
+anova(modelo_splines, modelo_sin_splines, test = 'F')
+
+```
+
+Ejecutamos también los métodos de comparación de modelos AIC y BIC: 
+
+```{r}
+
+AIC(modelo_splines, modelo_sin_splines, modelo_df_manuales, modelo_3)
+
+```
+
+```{r}
+
+BIC(modelo_splines, modelo_sin_splines, modelo_df_manuales, modelo_3)
+
+```
+
+Vemos que de acuerdo con el criterio AIC debemos escoger el modelo de ajuste que incluye splines en `Interest`, `Income` y `Edu`, y lineales en `Support`, `Health` y `HDI`. Sin embargo, el criterio BIC nos indica que debemos escoger aquel en el que le hemos introducido manualmente los grados de libertad a `Interest`, `Income` y `Edu`. Ambos criterios "descartan" el uso del modelo de ajuste polinómico en virtud de los otros modelos con splines. 
+
+Me quedaré con el modelo con menor AIC (`modelo_sin_splines`) porque, además de eso, es el más sencillo de implementar (no es necesario calcular los grados de libertad óptimos previamente).
