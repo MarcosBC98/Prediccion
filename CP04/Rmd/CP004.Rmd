@@ -1,0 +1,254 @@
+---
+title: "Predicción de las ventas trimestrales de Apple"
+author: "Marcos Barragán"
+date: "16/11/2020"
+output: 
+  prettydoc::html_pretty:
+    theme: cayman
+    highlight: github
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Objetivo 
+
+El objetivo de la práctica es predecir los resultados de las ventas de Apple en los trimestres de 2017 y 2018 a partir de los datos de ventas trimestrales desde 2008. 
+
+### Desarrollo: 
+
+```{r, include = FALSE}
+require(forecast)
+require(xts)
+require(ggplot2)
+library(ggplot2)
+library(tidyr)
+library(skimr)
+library(zoo)
+require(forecast)
+library(forecast)
+library(xts)
+library(lubridate) #manipular fechas
+library(magrittr)
+library(tidyverse)
+library(stringr)
+library(dplyr)
+library(ggfortify)
+library(knitr)
+
+```
+
+Cargamos el fichero de datos necesario para el desarrollo de la práctica. Este dataset consiste en dos columnas y 38 filas correspondientes a los ingresos de Apple en los diferentes trimestres desde 2008 hasta 2017.
+
+```{r}
+
+apple <- read.csv("IngresosApple.csv", sep = ";", dec = ",")
+
+head(apple)
+
+```
+
+Para poder tratar con los datos tenemos que pasar la primera columna del fichero a formato fecha. Los datos están codificados en forma trimestre - año, por lo que tenemos que hacerle entender al programa que queremos que los entienda como una fecha trimestral. Para ello usaremos _by = quarter_ en la lectura de los datos: 
+
+```{r}
+
+fechas <- seq(as.Date("2008/04/01"), as.Date("2017/09/30"), by = "quarter")
+
+apple <- mutate(apple, fecha = fechas)
+
+tail(apple)
+
+```
+
+```{r}
+
+ggplot(apple, aes(x = fecha, y = Ingresos)) + 
+  geom_line(color = 'Salmon', lwd = 1.2) + 
+  labs(x = 'Fechas trimestrales', y = "Ingresos")
+
+```
+
+A priori, vemos que no es estacionaria ni en media ni en varianza.
+
+```{r}
+
+xVentas <- xts(apple$Ingresos, order.by = as.Date(apple$fecha,"%Y/%m/%d"), frequency = 4)
+
+xVentas <- to.quarterly(xVentas) #Le hacemos entender que son trimestres lo que estamos tomando. 
+
+head(xVentas)
+
+#Transform to zoo data (forecast package)
+
+zVentas <- as.zoo(xVentas$xVentas.Close)
+
+
+#Change name
+names(zVentas) <- "Ventas" 
+
+head(zVentas)
+tail(zVentas)
+
+```
+
+Si representamos un gráfico en el que se muestren las ventas en función de los trimestres, obtendremos algo similar a: 
+
+```{r}
+
+df_new <- data.frame(value = as.vector(zVentas),
+                     time = time(zVentas))
+
+ggplot(df_new) +
+  geom_point(aes(x = time, y = value)) +
+  geom_line(aes(x = time,y = value), color = 'Red') +
+  ylab("Ventas") +
+  ggtitle("Ventas Trimestrales Apple") +
+  xlab("Trimestres")
+
+
+```
+
+```{r}
+
+tsVentas <- ts(coredata(zVentas), start = c(2008, 2), frequency = 4)
+
+ggfreqplot(tsVentas, freq = 4, nrow = 1, facet.labeller = c("Primer Trimestre","Segundo Trimestre","Tercer Trimestre","Cuarto Trimestre")) + 
+  ggtitle("Ingresos Trimestrales") +
+  theme(axis.text.x = element_text(angle = 45)) 
+
+```
+
+Vemos que las ventas se comportan de forma similar en los tres primeros trimestres, mientras que en el cuarto trimestre son claramente mayores las ventas. Posiblemente, esto se deba a que el cuarto trimestre engloba el final de año, donde se suelen presentar la mayor parte de los nuevos productos de Apple. Además, la campaña navideña puede contribuir al aumento de ventas.
+
+```{r}
+
+zVentas_log <- log(zVentas)
+
+df_new_log <- data.frame(value = as.vector(zVentas_log),
+                     time = time(zVentas_log))
+
+ggplot(df_new_log) +
+  geom_point(aes(x = time, y = value)) +
+  geom_line(aes(x = time,y = value), color = 'Red') +
+  ylab("Ventas") +
+  ggtitle("Ventas Trimestrales Apple") +
+  xlab("Trimestres")
+
+```
+
+En este caso, la transformación logarítmica de los datos acentúa incluso más la subida entre 2009 y 2012, y suaviza las subidas y bajadas trimestrales de 2013 en adelante. 
+
+Si representamos las diferencias entre las ventas a lo largo del tiempo:
+
+```{r}
+
+ggtsdisplay(zVentas_log)
+
+```
+
+Nos piden que dejemos fuera las ventas de 2017, por lo que tendremos que omitir 3 observaciones de los datos (que son las del primer, segundo y tercer trimestre de dicho año). 
+
+```{r}
+
+obs_omit <- 3 #Quitamos los 3 de 2017.
+
+num_obs <- length(zVentas_log)
+
+muestra <- window(zVentas_log, 
+                  start = index(zVentas_log[1]),
+                  end = index(zVentas_log[num_obs - obs_omit ])) 
+
+# Que coja de zVentas todo menos los 3 últimos datos. 
+
+```
+
+
+
+```{r}
+
+fit1 <- auto.arima(muestra, lambda = 0)
+
+knitr :: kable(summary(fit1))
+
+ggtsdisplay(fit1$residuals)
+
+checkresiduals(fit1)
+
+```
+
+El modelo ARIMA que nos plantea R automáticamente no es autoregresivo ni presenta media móvil, por lo que tampoco esperaremos unos buenos resultados en nuestra predicción a partir de este mdodelo. 
+
+Por otro lado, la prueba de Ljung-Box presenta un $p_{value} = 0.7615$, lo que nos lleva a discernir que no podemos rechazar la hipótesis nula de que los datos __no presentan autocorrelación__, y por tanto, podríamos considerarlo como _ruido blanco_ (error de media nula y varianza constante). 
+
+```{r}
+
+fventas.arima <- forecast(fit1)
+
+ggplot(df_new_log) +
+  geom_point(aes(x = time, y = value)) +
+  geom_line(aes(x = time, y = value)) +
+  geom_forecast(fventas.arima, alpha = 0.5) + 
+  ggtitle("ARIMA: Predicción Apple")
+
+```
+
+```{r}
+
+fventas.arima
+
+```
+
+### Modelos ETS:
+
+```{r}
+
+modelo_ets <- ets(muestra)
+
+ventas.ets <- forecast(modelo_ets)
+
+summary(ventas.ets)
+
+knitr :: kable(summary(modelo_ets))
+
+```
+
+Vemos que presenta un $RMSE = 0.106$ y un $MAPE = 0.839$. Si lo comparamos con lo obtenido en el caso anterior, para el modelo ARIMA, observamos que el RMSE es menor que en ese caso (recordemos que tenía $RMSE = 0.115$), pero un MAPE superior (el anterior modelo presentaba $MAPE = 0.808$). Esto nos presenta la disyuntiva de si deberíamos considerar uno u otro para la predicción. 
+
+```{r}
+
+ggplot(df_new_log) +
+  geom_point(aes(x = time, y = value)) +
+  geom_line(aes(x = time, y = value)) +
+  geom_forecast(ventas.ets, alpha = 0.3, lwd = 1.2, lty = 2, color = "red") + 
+  ggtitle("ETS: Predicción Apple")
+
+```
+
+```{r}
+
+pred <- as.data.frame(matrix(c(exp(ventas.ets$mean[1:obs_omit]),
+                               exp(fventas.arima$mean[1:obs_omit]),
+                               zVentas[(num_obs - obs_omit + 1):num_obs]),
+                             ncol = 3),
+                      row.names(c("Q1 2017", "Q2 2017", "Q3")))
+
+names(pred) <- c("Predicción ETS", "Predicción ARIMA", "Real")
+
+kable(pred)
+
+```
+
+## Conclusiones
+
+Como comentaba unas líneas más arriba, analizando los errores cometidos en las diferentes predicciones llegamos a la conclusión de que el RMSE es menor en el modelo ETS, mientras que el MAPE es menor en el ARIMA (el resto de errores son menores en el ARIMA también, pero al ser de una interpretación complicada no los comentaré exhaustivamente). Más allá de esto, el criterio AIC es mucho menor en el caso del ARIMA ($AIC = -178.08$) que en el caso ETS ($AIC = -14.95$), y el criterio BIC en el caso ARIMA ($BIC = -176.68$) es menor que en el caso ETS ($BIC = -0.948$). Esto, sumado a que el MAPE en el caso ARIMA es menor que en el ETS, me lleva a decantarme finalmente por el modelo ARIMA.
+
+No es una decisión rotunda, ni fácil, pues si nos fijamos en la gráfica del modelo ETS hay un par de puntos predictivos que prácticamente coinciden con los reales de las ventas. Pero si nos fijamos en los resultados estadísticos, los errores y los criterios de selección de modelos, debemos quedarnos con el ARIMA.  
+
+Ambos modelos predicen una caída de las ventas de Apple para los posteriores trimestres, cosa que es normal, pues el patrón que se observa en las gráficas es que las ventas disminuyen en el primer y segundo trimestre para remontar en el último; en otras palabras, es lógico pensar que se tiene que cumplir ese carácter tendencial. 
+
+Si tomamos una gráfica en la que se vean los datos de los trimestres de 2018 "a posteriori", veremos que las ventas (y los beneficios) han continuado subiendo, con lo que ambos modelos estimados hubiesen llevado a error. 
+
+
+![Captura.png](https://www.adslzone.net/app/uploads-adslzone.net/2019/04/screenshot.5-6.jpg){width="1000px"}{height="1000px"}
+
