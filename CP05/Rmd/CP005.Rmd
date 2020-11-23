@@ -1,0 +1,460 @@
+---
+title: "Caso Práctico 5: Colgate vs. Crest"
+author: "Marcos Barragán"
+date: "20/11/2020"
+output: 
+  prettydoc::html_pretty:
+      theme: cayman
+      highlight: github
+---
+
+## Objetivos: 
+
+El objetivo de esta práctica es llevar a cabo un análisis de las cuotas de mercado semanales de Colgate y Crest de los datos proporcionados, que van desde 1958 hasta 1963. Se escoge este período porque en él aparecen los efectos del marketing que la Asociación de Dentistas de Estados Unidos brindó a Crest al incliuirlo como una “ayuda importante en cualquier programa de higiene dental”.
+
+Se empleará un modelo ARIMA y unos modelos ARIMAX con análisis de intervención y búsqueda de outliers, para finalmente incluir una función de transferencia que genere un modelo que prediga los resultados de las cuotas de ambas firmas para las 16 primeras semanas de 1963. 
+
+
+## Esquema:
+
++ Series temporales
++ Modelos ARIMA
++ Modelos ARIMAX y análisis de intervención.
++ Función de transferencia. 
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE)
+```
+
+#Cargamos las librerías que necesitamos: 
+
+```{r, include = FALSE}
+
+library(readxl)
+library(dplyr)
+library(kknn)
+library(tidyverse)
+#library(MMWRweek)
+library(ggplot2)
+library(skimr)
+library(corrplot)
+library(ggfortify)
+library(TSA)
+library(forecast)
+library(xts)
+library(zoo)
+library(lmtest)
+library(dynlm)
+library(astsa)
+
+```
+
+Leemos los datos que nos proporcionan para esta práctica y mostramos la cabecera de los mismos: 
+
+```{r}
+
+datos <- readxl::read_excel("C:/Users/Barra/Desktop/Prediccion/CP05/data/data.xlsx")
+
+knitr :: kable(head(datos))
+
+```
+
+Transformamos las fechas a formato xts semanal, obteniendo unas entradas:
+
+```{r}
+
+fechas <- seq(as.Date("1958/01/08"), as.Date("1963/04/22"), by = "week")
+
+datos2 <- mutate(datos, fecha = fechas)
+
+xCrest <- xts(datos2$Crest, order.by = as.Date(datos2$fecha,"%Y/%m/%d"), frequency = 52)
+
+xCrest <- to.weekly(xCrest) #Le hacemos entender que son trimestres lo que estamos tomando. 
+
+head(xCrest)
+
+xColgate <- xts(datos2$Colgate, order.by = as.Date(datos2$fecha,"%Y/%m/%d"), frequency = 52)
+
+xColgate <- to.weekly(xColgate) #Le hacemos entender que son trimestres lo que estamos tomando. 
+
+head(xColgate)
+
+```
+
+Nos quedamos únicamente con los valores de cierre de las cuotas de Crest y Colgate:
+
+```{r, include = FALSE}
+
+zCrest <- as.zoo(xCrest$xCrest.Close)
+
+names(zCrest) <- "Cuotas"
+
+knitr:: kable(head(zCrest))
+
+```
+
+```{r, include = FALSE}
+
+zColgate <- as.zoo(xColgate$xColgate.Close)
+
+names(zColgate) <- "Cuotas"
+
+knitr:: kable(head(zColgate))
+
+```
+
+```{r}
+
+datos.crest <- datos$Crest
+
+datos.colgate <- datos$Colgate
+
+datos.Date <- seq(as.Date("1958/01/08"), as.Date("1963/04/22"), by = "week")
+
+#datos.Date
+
+```
+
++ Datos para Crest: 
+
+```{r}
+
+xCrest <- xts(datos.crest, order.by = datos.Date)
+
+xCrest <- to.weekly(xCrest)
+
+zCrest <- as.zoo(xCrest$xCrest.Close)
+
+names(zCrest) <- "Cuotas"
+
+knitr:: kable(head(zCrest))
+
+```
+
+```{r, fig.align = "Center"}
+
+autoplot(zCrest) +
+  geom_point(color = 'forestgreen') +
+  ylab("Cuotas de mercado") +
+  ggtitle("Cuotas de Mercado Crest") +
+  xlab("Semanas")
+
+```
+
+En el gráfico se aprecia lo que se comenta en el caso práctico, y es que el 1 de agosto de 1960, el Consejo de Terapéutica Dental de la American Dental Association (ADA) aprobó a Crest como una “ayuda importante en cualquier programa de higiene dental”. Es por ello que aparece una fuerte subida de la cuota de mercado de Crest. 
+
++ Para el caso de Colgate:
+
+```{r}
+
+xColgate <- xts(datos.colgate, order.by = datos.Date)
+
+xColgate <- to.weekly(xColgate)
+
+zColgate <- as.zoo(xColgate$xColgate.Close)
+
+names(zColgate) <- "Cuotas"
+
+knitr:: kable(head(zColgate))
+
+```
+
+
+```{r, fig.align = "Center"}
+
+autoplot(zColgate) +
+  geom_point(color = 'Red') +
+  ylab("Cuotas de mercado") +
+  ggtitle("Cuotas de Mercado Colgate") +
+  xlab("Semanas")
+
+```
+
+En este gráfico, vemos como en las últimas semanas de 1959 aparece un punto mucho conflictivo, que, para mi caso, es el punto 102. Lo intentaré implementar después al hacer el modelo con intervención. 
+
+Entre las principales caracteristicas se encuentran: la serie temporal de Crest tiene tendencia creciente, y da un salto en 1960, donde da un impulso pero no se estabiliza con respecto a las medias, lo que denota que es un evento escalón. Otras caracteristicas que tiene es que no es estacionaria ni estacional. En el caso de Colgate-Palmolive, también tiene el efecto del escalón en 1960 pero en sentido decreciente y no es estacionaria ni estacional.
+
+Quitamos los 16 datos de 1963 antes de comenzar a implementar los modelos ARIMA y ARIMAX. 
+
+```{r, include = FALSE}
+
+obs_omit <- 16
+
+num_obs <- length(zCrest)
+
+muestra_Crest <- window(zCrest, 
+                        start = index(zCrest[1]),
+                        end = index(zCrest[num_obs - obs_omit ])
+                        )
+
+muestra_Colgate <- window(zColgate, 
+                          start = index(zColgate[1]),
+                          end = index(zCrest[num_obs - obs_omit ])
+                          )
+
+knitr :: kable(cbind(tail(muestra_Crest), tail(muestra_Colgate)), col.names = c("Tail Crest", "Tail Colgate"))
+
+```
+
+### Modelos ARIMA
+
+Para hacer el modelo ARIMA, estudiaré a continuación qué valor de $\lambda$ es el que nos devuelve el máximo del logaritmo de la función de máxima verosimilitud. Esto se estudia a partir del test de Box-Cox.
+
+A continuación, implementaré los modelos ARIMA correspondientes a los datos de entrenamiento de Crest y Colgate. En particular, utilizaré el valor de $\lambda$ automático, que implementa en sí mismo un test de Box-Cox para devolver el máximo del logaritmo de la función de máxima verosimilitud.
+
+```{r}
+
+arima.Crest <- auto.arima(muestra_Crest, lambda = 'auto') # Probar a quitar el lambda. Criterio de BoxCox. 
+
+summary(arima.Crest)
+
+```
+
+Para Crest, el mejor modelo es el (0, 1, 1). En este, caso dicho modelo se hace para un $\lambda = 0.426$, y presenta un $\sigma^{2}_{estimado} = 0.0114$, un $AIC = -419.24$. 
+
+```{r}
+
+arima.Colgate <- auto.arima(muestra_Colgate, lambda = 'auto')
+
+summary(arima.Colgate)
+
+```
+
+Para Colgate, el mejor modelo es el (0, 1, 1). El valor del parámetro de transformación de Box-Cox nos devuelve, en este caso, un valor muy próximo a 1. Vemos que este modelo presenta un $\sigma^{2}_{estimado} = 0.0479$ y un $AIC = -838.3$. 
+
+Si mostramos un correlograma de los residuos para los modelos ARIMA de ambas variables, tendremos: 
+
+```{r, fig.align = "Center"}
+
+ggtsdisplay(arima.Crest$residuals)
+
+ggtsdisplay(arima.Colgate$residuals)
+
+```
+
+A priori, vemos que los residuos parecen comportarse como ruido blanco. Sin embargo, lo comprobaré explícitamente a través del test de Ljung-Box. Este modelo toma como hipótesis nula que los errores/residuos se comportan como ruido blanco. En función del $p_{value}$ obtenido podremos aceptar o rechazar esta hipótesis. 
+
+```{r}
+
+a <- Box.test(arima.Crest$residuals, lag = 24, fitdf = 1, type = "Lj")
+
+b <- Box.test(arima.Colgate$residuals, lag = 24, fitdf = 1, type = "Lj")
+
+knitr :: kable(cbind(a$p.value, b$p.value), col.names = c('P-value Arima Crest', 'P-value Arima Colgate'))
+
+```
+
+Los $p_{values}$ obtenidos para el test Box-Ljung ($p_{value}=0.5728$ y $p_{value}=0.4391$ respectivamene) nos dicen que no podemos rechazar la hipótesis nula, por lo que podemos considerar los residuos del modelo __como ruido blanco__. 
+
+El siguiente paso es identificar si se tiene outliers aditivos (que afectan la serie temporal) e innovativos (que afectan el error). 
+
+```{r, echo=FALSE}
+
+detectAO(arima.Crest)
+
+detectIO(arima.Crest)
+
+```
+Para el caso de Crest se identifica la intervención de ADA como un outlier aditivo (Observación 135). También se encontraron otros outliers aditivos pero podrían ser efectos de la observación 135. No se han identificado outliers innovativos. 
+
+```{r, echo=FALSE}
+
+detectAO(arima.Colgate)
+
+detectIO(arima.Colgate)
+
+```
+
+En el caso de Colgate no se detectaron outliers aditivos ni innovativos.
+
+Si llevamos a cabo una representación de la predicción que estima este modelo para las 16 variables eliminadas tendremos, para el caso d 
+
+```{r, fig.align = "Center"}
+
+Crest.1963 <- forecast(arima.Crest, h = 16)
+
+autoplot(Crest.1963, ylab = "Crest", main = 'Modelo AutoARIMA para Crest')
+
+Colgate.1963 <- forecast(arima.Colgate, h = 16)
+
+autoplot(Colgate.1963, ylab = "Colgate", main = 'Modelo AutoARIMA para Colgate')
+
+```
+
+A la vista de los gráficos es evidente que las predicciones son nefastas. Los modelos ARIMA que selecciona el comando auto.arima no son válidos para nuestros casos. 
+
+Una vez conocemos todos estos resultados, lo que haré será plantear el modelo ARIMAX correspondiente a este caso. 
+
+### Modelos ARIMAX 
+
++ ARIMAX Crest: 
+
+Para el caso de Crest, tomé 
+
+```{r}
+
+arimax.Crest <- arimax(muestra_Crest, order = c(0, 1, 1), 
+                       seasonal = list(order = c(1,0,0),period = 52),
+                       xtransf = data.frame(I135 = 1*(seq(muestra_Crest) == 135),
+                                            I136 = 1*(seq(muestra_Crest) >= 136)),
+                       transfer = list(c(0,0), c(1,0)),
+                       method = 'ML') #Maxima verosimilitud
+arimax.Crest
+
+```
+
+Si representamos los resultados del ARIMAX estimado para Crest: 
+
+```{r, fig.align = "Center"}
+
+plot(muestra_Crest, ylab = 'Crest', col = 'red', main = 'ARIMAX Model over Crest sample')
+
+grid()
+
+points(fitted(arimax.Crest), col = 'blue')
+
+knitr :: kable(arimax.Crest$coef, col.names = 'Coefficients')
+
+```
+
+```{r}
+
+ggtsdisplay(arimax.Crest$residuals)
+
+Box.test(arima.Crest$residuals, lag = 24, fitdf = 1, type = "Lj")
+
+```
+
+Como vemos, los errores del modelo son ruido blanco (se ve en el gráfico y el test de Ljung nos devuelve un $p_{value} = 0.5728$). Es más, si comprobamos de nuevo si hay outliers una vez implementado el ARIMAX, obtendremos que no hay nuevos valores outliers, por lo que no considero oportuno introducir más outliers o correcciones al modelo ARIMAX.
+
+```{r, echo=FALSE}
+
+detectAO(arimax.Crest)
+
+detectIO(arimax.Crest)
+
+```
+
++ ARIMAX Colgate:
+
+En mi caso, para implementar la intervención del modelo de Colgate he considerado el valor de la observación 135 como escalón, que coincide con el anuncio de ADA, pero, además, le he introducido un outlier "manualmente" en la observación 102 de la muestra del dataset, que coincide con la semana 50 de 1959. La pongo porque me ha sorprendido que no aparezca en el análisis de IO y AO hecho, pues es un valor outlier bastante claro. Una vez hechas estas consideraciones, lo que obtenemos es: 
+
+```{r}
+
+arimax.Colgate <- arimax(muestra_Colgate, order = c(0, 1, 1), 
+                         seasonal=list(order = c(1,0,0),period = 52),
+                         xtransf = data.frame(I135 = 1*(seq(muestra_Colgate) >= 135),
+                                              I102 = 1*(seq(muestra_Colgate) == 102)),
+                         transfer = list(c(1,0), c(0,0)),
+                         method = 'ML') # Máxima verosimilitud
+arimax.Colgate
+
+```
+
+Representando lo obtenido para el modelo ARIMAX de Colgate, tendremos: 
+
+```{r, fig.align = "Center"}
+
+plot(muestra_Colgate, ylab='Colgate', col = 'navy', main = 'ARIMAX Model sobre la muestra de Colgate')
+
+grid()
+
+points(fitted(arimax.Colgate), col = 'green3')
+
+knitr :: kable(arimax.Colgate$coef, col.names = 'Coefficients')
+
+```
+
+En el gráfico vemos cómo ajusta perfectamente el outlier de la penúltima semana de 1959, así como que el resto de puntos se adecúa bastante bien con el comportamiento de la serie. 
+
+Después de implementar el modelo ARIMAX construido anteriormente, observaremos cómo no aparecen más outliers aditivos ni innovativos. 
+
+```{r}
+
+detectAO(arimax.Colgate)
+
+detectIO(arimax.Colgate) 
+
+```
+
+Como antes, si analizamos los residuos generados en el modelo ARIMAX: 
+
+```{r, fig.align = "Center"}
+
+ggtsdisplay(arimax.Colgate$residuals)
+
+Box.test(arima.Colgate$residuals, lag = 24, fitdf = 1, type = "Lj")
+
+```
+
+Como el caso de Crest, los residuos se pueden considerar ruido blanco, por lo que el modelo es estadísticamente válido. Además, como comentaba también en el caso anterior, el hecho de que no aparezcan outliers de ningún tipo tras el modelo, nos dice que el modelo ARIMAX implementado es válido, por lo que no continuaré introduciendo más correcciones sobre el mismo. 
+
+### Función de transferencia: 
+
+```{r}
+
+crest135 <- window(muestra_Crest, end = 135) 
+
+colgate135 <- window(muestra_Colgate, end = 135) 
+
+#Generamos las diferencias a partir de la observación 135
+
+dCrest135 <- diff(crest135) 
+
+dColgate135 <- diff(colgate135) 
+
+```
+
+
+```{r, fig.align = "Center"}
+
+arimax.fit1 <- arimax(dColgate135,
+               order = c(0,1,1),
+               include.mean = TRUE,
+               xtransf = dCrest135,
+               transfer = list(c(0,16)),
+               method = "ML")
+
+summary(arimax.fit1)
+
+plot(arimax.fit1$coef[2:17], type = 'h', main = "Efecto de los 16 retardos")
+
+```
+
+Una vez que tenemos los parámetros estimados podemos observar que no hay ningún parámetro antes del primer parametro significativo y no podemos determinar ninguna estructura de decaimiento. Por tanto, los valores asociados a mi función de transferencia son:
+
+b = 0
+
+r = 0
+
+s = 1
+
+```{r}
+
+arimax.fit <- arimax(dColgate135,
+                      order = c(0, 1, 1), 
+                      include.mean = TRUE, 
+                      seasonal = list(order = c(1, 0, 0), period = 52),
+                      fixed = c(NA,NA,0,NA),
+                      xtransf = dCrest135,
+                      transfer = list(c(0, 1)), 
+                      method = "ML")
+    
+summary(arimax.fit)
+
+```
+
+
+```{r fig.align = 'center'}
+
+summary(arimax.fit)
+
+ggtsdisplay(arimax.fit$residuals)
+
+plot(arimax.fit$coef[2:17], type = "h")
+
+Box.test(arima.Colgate$residuals, lag = 24, fitdf = 1, type = "Lj")
+
+```
+
+Los residuos vuelven a salir como ruido blanco, por lo que consideraremos el modelo ARIMAX con función de transferencia como estadísticamente válido, dando por concluida la práctica. 
