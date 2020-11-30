@@ -1,0 +1,274 @@
+---
+title: "Caso Práctico 6 a)"
+author: "Marcos Barragán"
+date: "28/11/2020"
+output:
+  prettydoc::html_pretty:
+    theme: cayman
+    highlight: github
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r, include = FALSE}
+
+library(quantmod)
+library(forecast)
+library(fGarch)
+library(ggplot2)
+library(dplyr)
+library(vars)
+
+```
+
+# Objetivo: 
+
+Este caso práctico presenta dos objetivos principales:
+
++ Por un lado, generar un modelo GARCH para corregir la heteocedasticidad de la varianza residual de los rendimientos de BMW como serie temporal. 
+
++ Por otro lado, generaremos modelos VAR con el fin de comparar los efectos dinámicos de BMW y Volkswagen.
+
+
+## 1) Datos históricos de BMW y Volkswagen: 
+
+A través de la librería _quantmod_ cargamos los datos de `BMW` (BMW.DE) y Volkswagen (`VOW.DE`). 
+
+```{r}
+
+#BMW se llama BMW.DE en Yahoo Finance. Tomamos desde el 1 de Enero de 2014 hasta hoy (finales de Noviembre 2020).
+
+getSymbols('BMW.DE', from = '2014-01-01', to = Sys.Date())
+
+BMW <- BMW.DE[,6]
+
+#VolksWagen se llama VOW.DE en Yahoo Finance.
+
+getSymbols('VOW.DE', from = '2014-01-01', to = Sys.Date())
+
+VW <- VOW.DE[,6]
+
+```
+
+Si representamos el precio de las acciones de `BMW` y `Volkswagen` en función del tiempo. 
+
+```{r}
+
+BMW_VW <- cbind(BMW, VW)
+
+names(BMW_VW) <- c('Valor BMW', 'Valor Volkswagen')
+
+autoplot(BMW_VW, facets = FALSE) + #facets FALSE para que salgan las dos en el mismo gráfico.
+  ggtitle("Evolución de BMW y Volkswagenen bolsa") +
+  xlab("Tiempo") +
+  ylab("Valor")
+
+```
+
+### 1.1) Rentabilidades BMW:
+
+Las rentabilidades de BMW las calcularemos a partir de la función _dailyReturn_, presente en el paquete quantmod, que nos devuelve los rendimientos diarios de los activos sin necesidad de tener que definir funciones que lo hagan. Esto es:
+
+```{r}
+
+BMW_rent <- dailyReturn(BMW, type = 'log', leading=FALSE)
+
+BMW_rent <- na.exclude(BMW_rent)
+
+head(BMW_rent)
+
+```
+
+La volatilidad la calcularemos, en este caso, como el cuadrado de las rentabilidades. 
+
+```{r}
+
+BMW_vol <- BMW_rent^2
+
+```
+
+Podemos estudiar el comportamiento del precio, la rentabilidad y la volatilidad de los activos en un mismo gráfico:
+
+```{r, fig.align = "center", fig.height = 10, fig.width = 10}
+
+#plot.zoo(cbind(BMW, BMW_rent))
+
+plot.zoo(cbind((BMW), BMW_rent, BMW_vol), main = 'Serie, rendimiento y volatilidad', xlab = 'Años', ylab = c('Precio', 'Rentabilidad', 'Volatilidad'), col = c('coral', 'grey', 'gold'))
+
+```
+
+Si contrastamos la media de los rendimientos del activo BMW, a través de una t de Student, para saber si presenta media nula o no:
+
+```{r}
+
+t.test(BMW_rent) # no rechazamos media = 0
+
+```
+
+El hecho de obtener un $p_{value} = 0.8322$ nos dice que no podemos rechazar la hipótesis nula de que la media de los rendimientos sea nula. 
+
+```{r}
+
+Box.test(BMW_vol, lag=10,  type="Lj")
+
+Box.test(BMW_vol, lag=20,  type="Lj")
+
+Box.test(BMW_vol, lag=40,  type="Lj")
+
+```
+
+Para los tres valores de lag implementados obtenemos un $p_{value} = 2.2·10^{-16}$, lo que nos lleva, sin ninguna duda, a rechazar la hipótesis nula de que la volatilidad NO es ruido blanco. Esto significa que la varinza de la serie de la rentabilidad de BMW no es constante.
+
+```{r}
+
+T.Lag <- function(r,m){
+  y = (r - mean(r))^2
+  t = length(r)
+  a = y [(m +1) : t]
+  x = matrix(0, (t - m), m)
+  for (i in 1:m){
+    x[,i] = y [(m+1-i):(t-i)]
+  }
+  md = lm(a~x)
+  summary(md)
+}
+
+```
+
+
+```{r}
+
+T.Lag(BMW_rent, m = 20)
+
+```
+
+De nuevo obtenemos un $p_{value} = 2.2·10^{-16}$, por lo que rechazamos la hipótesis de que no es necesario llevar a cabo un modelo GARCH para estos datos. Esto se traduce en que será necesario estimar un modelo generalizado de heteroscedasticidad condicionadal (GARCH).
+
+## 2) Implementamos el modelo GARCH:
+
+Al implementar el modelo GARCH(1,1) y pedirle que nos devuelve las gráficas correspondientes, debemos especificarle claramente cuál es el que queremos.  
+
+```{r, fig.align = 'Center', fig.height = 6, fig.width = 8}
+
+garch11 <- garchFit(~1 + garch(1,1), data = BMW_rent, trace = FALSE)
+
+summary(garch11)
+
+resi <- residuals(garch11, standardize = TRUE) 
+
+resi <- xts(resi, order.by = index(BMW_rent))
+
+tsdisplay(resi^2)
+
+plot(garch11, which = c(9, 12, 13))
+
+```
+
+Si implementamos un test de Ljung para estudiar el comportamiento de los residuos del modelo GARCH obtenemos que se pueden aceptar los residuos como ruido blanco.
+
+```{r}
+
+Box.test(resi , lag=10,  type="Lj")
+
+```
+
+Si representamos la volatilidad obtenida para este modelo GARCH(1, 1)
+
+```{r}
+
+vol_garch11 <- volatility(garch11)  
+
+vol_garch11 <- xts(vol_garch11, order.by = index(BMW_rent)) #  Volatilidad en forma de XTS
+
+plot(sqrt(252)*vol_garch11, main = 'Volatilidad para el modelo GARCH(1,1)')
+
+```
+
+
+```{r}
+
+predict(garch11)
+
+predict(garch11, n.ahead = 10, plot = TRUE, crit_val = 2)
+
+predict(garch11, n.ahead = 10, plot = TRUE, conf = .9, nx = 100)
+
+```
+
+Podemos probar un segundo modelo GARCH y estudiar su comportamiento. En este caso, generaré un modelo GARCH(1,2) (un retardo en varianza y dos en errores).
+
+```{r}
+
+garch22 <- garchFit(~1 + garch(1,2), data = BMW_rent, trace = FALSE)
+
+summary(garch22)
+
+resi22 <- residuals(garch22, standardize = TRUE) 
+
+resi22 <- xts(resi22, order.by = index(BMW_rent))
+
+tsdisplay(resi22^2)
+
+plot(garch22, which = c(9, 12, 13))
+
+```
+
+## 3) Modelos VAR:
+
+A continuación generaremos un modelo VAR sobre el DataFrame con las series de rendimientos de `BMW` y `Volkswagen`. 
+
+Los rendimientos de `BMW` los calculamos al inicio, antes de implementar los modelos GARCH, pero no teníamos los de Volkswagen. Los calculo a continuación y genero un DataFrame que contenga los rendimientos de ambos activos.
+
+```{r}
+
+VOL_rent <- dailyReturn(VW)
+
+rent <- cbind(BMW_rent, VOL_rent)
+
+names(rent) <- c('Rendimientos BMW', 'Rendimientos Volkswagen')
+
+rent <- na.omit(rent)
+
+head(rent)
+
+```
+
+Si implementamos el modelo VAR sobre los rendimientos de los activos considerados: 
+
+```{r}
+
+VAR_model <- VAR(rent)
+
+summary(VAR_model) 
+
+causality(VAR_model) 
+
+```
+
+Del estudio de la causalidad obtenemos dos resultados: 
+
++ Por una parte, el test de bidireccionalidad de Granger nos indica que no podemos rechazar que los rendimientos de BMW no están causados por los de Volkswagen.
+
++ Por otra, obtenemos que debemos rechazar la hipótesis de que no hay causalidad instantánea entre los rendimientos de BMW y Volkswagen.
+
+El $p_{value} = 2.2·10^{-16}$ obtenido en el test de causalidad implica que podemos considerar que existe bidireccionalidad. 
+
+```{r}
+
+VAR.irf <- irf(VAR_model) 
+
+VAR.irf
+
+plot(VAR.irf)
+
+```
+
+
+```{r}
+
+predict(VAR_model, plot = TRUE, n.ahead = 8, ci = 0.95)
+
+```
+
