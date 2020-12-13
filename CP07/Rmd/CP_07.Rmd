@@ -1,0 +1,178 @@
+---
+title: "Caso Práctico 7"
+author: "Marcos Barragán"
+date: "13/12/2020"
+output: 
+  prettydoc::html_pretty:
+    theme: cayman
+    highlight: github
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_chunk$set(warning = FALSE)
+```
+
+```{r, include = FALSE}
+
+library(depmixS4)
+library(TTR)
+library(ggplot2)
+library(reshape2)
+library(xts)
+library(extrafont)
+library(quantmod)
+library(CausalImpact)
+
+```
+
+Cargamos los datos necesarios para este caso, que serán las series de precios de los activos de BMW y Volkswagen. Realmente los que nos interesan son los precios de cierre ajustados, así que será con los que me quedaré posteriormente. 
+
+```{r, warning = FALSE}
+
+getSymbols('BMW.DE', from = '2014-01-01', to = Sys.Date())
+
+# Despreciamos los NA's:
+
+BMW <- na.omit(BMW.DE)
+
+BMW_adj <- BMW$BMW.DE.Adjusted
+
+colnames(BMW_adj) <- c("Close")
+
+```
+
+```{r, warning = FALSE}
+
+getSymbols('VOW.DE', from = '2014-01-01', to = Sys.Date())
+
+# Despreciamos los NA's:
+
+VW <- na.omit(VOW.DE)
+
+VW_adj <- VW$VOW.DE.Adjusted
+
+colnames(VW_adj) <- c("Close")
+
+```
+
+Unimos ambos para tener los mismos precios de cierre ajustados en un único objeto:
+
+```{r}
+
+BMW_VW <- cbind(BMW_adj, VW_adj)
+
+names(BMW_VW) <- c('BMW', 'VW')
+
+```
+
+Para tener un apoyo visual sobre lo que vamos a estudiar más adelante, llevaré a cabo una representación de la serie temporal de `BMW` y `Volkswagen`.
+
+```{r, fig.align = "Center"}
+
+plot(BMW_adj, main = "Precio de cierre ajustado BMW")
+
+plot(VW_adj, main = "Precio de cierre ajustado Volkswagen")
+
+```
+
+Si las escalamos, para verlas en conjunto:
+
+```{r, fig.align = "Center"}
+
+plot(scale(BMW_VW), main = 'Precio de cierre ajustado de \n BMW y Volkswagen escaladas', col = c('Forestgreen', 'cyan'))
+
+```
+
+De acuerdo con la información obtenida en la fuente [ABC](https://www.abc.es/economia/abci-dieselgate-escandalo-sin-fecha-caducidad-cumple-primer-aniversario-201609190212_noticia.html?ref=https:%2F%2Fwww.google.com%2F), consideraré el inicio del caso _"Diesel Gate"_ el día 1 de Septiembre de 2015.
+
+Dividiendo los tiempos entre pre y post escándalo, tendremos: 
+
+```{r}
+
+pre <- as.Date(c("2014-01-01", "2015-09-01"))
+
+post <- as.Date(c("2015-09-02", "2020-12-11"))
+
+```
+
+A continuación implementaré los modelo de _causal impact_ (dentro de la librería con su mismo nombre) para los dos activos por separado. 
+
+### Impacto de BMW frente a Volkswagen
+
+En primer lugar, consideraré el caso en el que intentamos explicar qué ocurrió con los precios de `BMW` cuando salió a la luz el escándalo citado sobre `Volkswagen`.
+
+```{r}
+
+modelo_causal <- CausalImpact(BMW_VW, pre.period = pre, post.period = post)
+
+```
+
+Una vez estimado el modelo, llevaré a cabo una representación y un resumen de los resultados obtenidos en el mismo. En dicho resumen será donde aparezcan los resultados y el efecto del escándalo en los precios de los activos. 
+
+```{r, fig.align = "Center"}
+
+summary(modelo_causal)
+
+plot(modelo_causal)
+
+plot(modelo_causal, "original")
+
+```
+
+Como vemos en el resumen del modelo, el caso _diesel gate_ tuvo un efecto positivo en el precio de BMW, ya que presentó un efecto relativo positivo del 11% sobre el precio de sus acciones. Si no hubiera ocurrido esto, las expectativas indicaban que hubiese pasado de un valor del precio de 67 a un precio de 63. Por tanto, y como esperábamos, el efecto de la investigación y descubrimiento del fraude que salpicó a `Volkswagen` tuvo un efecto positivo sobre la marca `BMW`.
+
+El paquete _CausalImpact_ presenta una ventaja bastante grande, y es que elabora automáticamente un reporte de lo que ha ocurrido al estimar el modelo causal. Para ello, simplemente debemos indicarle al hacer el _summary_ la opción de _report_.
+
+```{r}
+
+summary(modelo_causal, 'report')
+
+```
+
+### Impacto del caso en Volkswagen
+
+En segundo lugar, estimaremos el efecto que pudo tener el caso de corrupción en el precio de Volkswagen.
+
+```{r, include = FALSE}
+
+VW_BMW <- cbind(VW_adj, BMW_adj)
+
+names(VW_BMW) <- c('VW', 'BMW')
+
+```
+
+Elaboramos, de la misma forma que en el caso anterior, el modelo de _Casual Impact_ sobre este segundo vector, indicándole los mismos cortes de períodos de pre y post fecha del escándalo:
+
+```{r}
+
+modelo_causal_VW <- CausalImpact(VW_BMW, pre.period = pre, post.period = post)
+
+```
+
+En este caso, los resultados y los gráficos que obtenemos son de la forma: 
+
+```{r, fig.align = "Center"}
+
+summary(modelo_causal_VW)
+
+plot(modelo_causal_VW)
+
+plot(modelo_causal_VW, "original")
+
+```
+
+Por contra con respecto al caso anterior, el efecto del escándalo _diesel gate_ tuvo un efecto relativo muy negativo, del -12%, sobre los precios de `Volkswagen`. En particular, se puede ver que si no se hubiese investigado y descubierto el fraude en los coches de la marca `Volkswagen`, la estimación de los precios de esta marca los situaba (en media) en 155, mientras que, al destaparse todo, los precios cayeron a 136 y, posteriormente, llegaron a bajar de los 100. 
+
+Por tanto, es evidente que sí hay un efecto causal directo entre la irrupción del caso _diesel gate_ y los precios de los vehículos de las marcas `BMW` y `Volkswagen`. 
+
+De nuevo, ejecutaré el reporte que tiene intrínseco el paquete de _CausalImpact_ para verificar las conclusiones obtenidas.
+
+```{r}
+
+summary(modelo_causal_VW, 'report')
+
+```
+
+
+
