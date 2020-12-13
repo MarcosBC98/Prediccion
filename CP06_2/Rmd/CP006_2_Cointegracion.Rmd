@@ -1,0 +1,369 @@
+---
+title: "Cointegración series BMW y Volkswagen"
+author: "Marcos Barragán"
+date: "12/12/2020"
+output: 
+  prettydoc::html_pretty:
+    theme: cayman
+    highlight: github
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r, include = FALSE}
+
+library(depmixS4)
+library(TTR)
+library(ggplot2)
+library(reshape2)
+library(xts)
+library(extrafont)
+library(PairTrading)
+library(quantmod)
+library(urca)
+
+```
+
+</div style="text-justify">
+
+## Objetivo: 
+
+El objetivo de este subapartado del caso práctico 6 es el estudio de la cointegración entre las series temporales de BMW y Volkswagen.
+
+Se dice que dos series temporales están cointegradas si existe un vector de coeficientes que permite formar una combinación lineal estacionaria entre ambas series. Para determinar esto en el ejercicio que nos concierne analizaremos los resultados de la documentación presentada en la última sesión.
+
+</div>
+
+```{r}
+
+getSymbols('BMW.DE', from = '2014-01-01', to = Sys.Date())
+
+BMW <- na.omit(BMW.DE)
+
+BMW <- na.omit(BMW[, 6])
+
+getSymbols('VOW.DE', from = '2014-01-01', to = Sys.Date())
+
+VW <- na.omit(VOW.DE)
+
+VW <- na.omit(VOW.DE[,6])
+
+BMW_VW <- cbind(BMW, VW)
+
+names(BMW_VW) <- c('BMW', 'VW')
+
+head(BMW_VW)
+
+```
+
+
+```{r, include = FALSE}
+
+BMW_rent <- dailyReturn(BMW, type = 'log', leading = FALSE)
+
+BMW_rent <- na.exclude(BMW_rent)
+
+head(BMW_rent)
+
+VW_rent <- dailyReturn(VW, type = 'log', leading = FALSE)
+
+VW_rent <- na.exclude(VW_rent)
+
+head(VW_rent)
+
+BMW_VW_rent <- cbind(BMW_rent, VW_rent)
+
+names(BMW_VW_rent) <- c('Rend. BMW', 'Rend. VW')
+
+```
+
+
+```{r, fig.align = "Center"}
+
+autoplot(BMW_VW, facets = NULL, main = 'Series temporales del precio de cierre ajustado de BMW y VW') +
+  xlab("Tiempo") +
+  ylab("Precio de cierre ajustado") + 
+  theme_classic()
+
+```
+
+Nos interesa conocer el carácter estacionario (o no estacionario) de la serie. Para averiguarlo, aplicaremos el test ADF (o prueba Dickey-Fuller aumentada) sobre ambas series temporales, lo que nos devolverá unos resultados de:
+
+```{r}
+
+adf.test(BMW_VW[, 1], k = 0)
+
+adf.test(BMW_VW[, 2], k = 0)
+
+```
+
+Como vemos, los p-valores de ambas pruebas son superiores al 5%, por lo que no tenemos indicios para rechazar la no estacionariedad de las series (es decir, que consideramos la hipótesis nula de que las series no son estacionarias).
+
+La función _ur.df_ del paquete _urca_ de R nos permite llevar a cabo un test de augmented Dicker-Fuller como en el caso anterior, pero nos permite introducirle más parámetros. En mi caso, consideraré el método AIC para la valoración y, como comenta en la documentación, llevaré a cabo la implementación del test con la consideración de la tendencia para evitar posibles resultados erróneos. 
+
+```{r}
+
+test_BMW <- ur.df(BMW_VW[, 1], type = "trend", selectlags = "AIC", lags = 12)
+
+summary(test_BMW)
+
+```
+
+```{r}
+
+test_VW <- ur.df(BMW_VW[, 2], type = "trend", selectlags = "AIC", lags = 12)
+
+summary(test_VW)
+
+```
+
+```{r, fig.align = "Center"}
+
+#Estimate parameters & plot spread
+
+mod_lineal <- EstimateParameters(BMW_VW, method = lm)
+
+#str(mod_lineal)
+
+plot(mod_lineal$spread, main = 'Extensión del modelo de regresión lineal BMW y VW')
+
+```
+
+El gráfico no tiene mucho aspecto de representar una serie estacionaria. No obstante, considerar solo una prueba visual de 
+
+Ahora debemos asegurarnos de la estacionariedad de la serie compuesta por ambos activos. Para ello, emplearé la función _IsStationary_ de R, que nos devuelve el carácter estacionario (o no estacionario) de la serie una vez le especificamos el p-value que queremos considerar como mínimo. En mi caso, como en el resto de la práctica, consideraré un 5% como valor de significación para confirmar o rechazar hipótesis.
+
+```{r}
+
+IsStationary(mod_lineal$spread, 0.05)
+
+```
+
+Ambos test nos devuelven que la hipótesis de que la nueva serie sea estacionaria es falsa, y, por ende, debamos rechazar (a ese nivel de significaión) la hipótesis de estacionariedad. Posteriormente, probé con un nivel de significación mayor (10%) obteniendo el mismo resultado.
+
+En otras palabras, esto pone de manifiesto que no existe una raíz unitaria entre BMW y Volkswagen, por lo que no tenemos una serie formada por una combinación lineal, y, por ende, consideraremos que ambas series no están cointegradas. 
+
+Esto se podría haber conseguido a partir de una representación de ambas series utilizando los coeficientes de intercept que salían en el test de _ur.df_. Si construyésemos la serie conjunto a partir de dichos valores, tendríamos: 
+
+```{r, fig.align = "Center"}
+
+union_series <- 0.86*BMW_VW[, 1] + 1.16*BMW_VW[, 2]
+
+plot(union_series, type="l", col = 'forestgreen', main = 'Series BMW y VW concatenadas con los valores \n del intercept del test Augmented Dicker-Fuller')
+
+adf.test(union_series)
+
+```
+
+
+Vemos que el resultado arrojado es consistente con los anteriores, pues obtenemos que no podemos considerar la estacionariedad de las series, por lo que aseveramos que ambas series no están cointegradas. 
+
+## Anexo: 
+
+### Estimación del Hidden Markov Model (HMM) para el caso de BMW:
+
+```{r}
+
+rm(list=ls())
+
+library(depmixS4)
+library(TTR)
+library(ggplot2)
+library(reshape2)
+library(xts)
+library(extrafont)
+library(quantmod)
+
+```
+
+Cargamos los datos de BMW desde el 1 de Enero de 2014 hasta el 9 de Diciembre de 2020 a través de _getSymbols_ de quantmod:
+
+```{r}
+
+getSymbols('BMW.DE', from = '2014-01-01', to = Sys.Date())
+
+# Despreciamos los NA's:
+
+BMW <- na.omit(BMW.DE)
+
+```
+
+Realmente los que nos interesan son los precios de cierre ajustados: 
+
+```{r}
+
+BMW_adj <- BMW$BMW.DE.Adjusted
+
+colnames(BMW_adj) <- c("Close")
+
+```
+
+A continuación utilizo una función para transformar los datos a semanales. Seguiré para ello el script presentado en clase.
+
+```{r}
+
+semanal = function(BMW_adj){
+  
+  aa <- seq.Date(as.Date(min(index(BMW_adj))), 
+                 length.out = 2 + as.numeric(as.Date(max(index(BMW_adj))) - as.Date(min(index(BMW_adj)))), 
+                 by="1 days")
+  
+  bb <- xts(rep(NA, length(aa)), aa)
+  
+  cc <- bb[time(bb[.indexwday(bb) == 5])]
+  
+  dd <- sapply(1:(length(cc) - 1), 
+               function(x) last(BMW_adj[seq.Date(as.Date(time(cc[x])), as.Date(time(cc[x + 1])),1)]))
+  
+  coredata(cc[2:(length(cc))]) <- dd
+  
+  return(cc)
+}
+
+
+BMW_adj_weekly = semanal(BMW_adj)
+
+colnames(BMW_adj_weekly) <- c("Close")
+
+```
+
+Una vez hecho esto, le añadimos la rentabilidad diaria del activo, despreciando los NA que aparezcan.
+
+```{r}
+
+BMW_adj_weekly$Rent <- log(BMW_adj_weekly$Close) - lag(log(BMW_adj_weekly$Close), k=2)
+
+
+BMW_adj_weekly <- na.exclude(BMW_adj_weekly)
+
+```
+
+Transformamos el XTS en un DataFrame para poder operar con él, y le añadimos la fecha considerada:
+
+```{r}
+
+BMW_adj_weekly <- data.frame(BMW_adj_weekly)
+
+# Poner la fecha que esta en el nombre de la fila como columna de fecha con formato
+
+BMW_adj_weekly$Fecha <- as.Date(row.names(BMW_adj_weekly), "%Y-%m-%d")
+
+```
+
+Aquí definiremos el modelo HHM Markov con dos estados. Explicaremos la rentabilidad en función de la constante.
+
+```{r}
+
+modelo_HHM <- depmix(Rent ~ 1, 
+              family = gaussian(), 
+              nstates = 2, 
+              data = BMW_adj_weekly)
+
+set.seed(2020)
+
+```
+
+Estimamos ese modelo y representamos un resumen de los resultados junto con él.
+
+```{r}
+
+fit_HHM <- fit(modelo_HHM, verbose = FALSE)
+
+summary(fit_HHM)
+
+print(fit_HHM)
+
+```
+
+La probabilidad de encontrarnos en cada estado viene dada por: 
+
+```{r}
+
+probab <- posterior(fit_HHM)
+
+BMW_adj_weekly$pState <- probab[,1]
+
+BMW_adj_weekly$pBull <- probab[,2]  
+
+BMW_adj_weekly$pBear <- probab[,3]
+
+```
+
+```{r}
+
+#Nombre a la Primera columna
+
+colnames(BMW_adj_weekly)[1] <- "BMW"
+
+df_ggplot <- melt(BMW_adj_weekly[,c(1,2,3,4,5,6)], 
+           id = "Fecha", 
+           measure = c("BMW","Rent","pBull","pBear","pState"))
+
+
+##Gráfico Probabilidad
+positivoColor <- subset(df_ggplot, df_ggplot$variable == "Rent")
+
+pColor=ifelse(positivoColor$value >=0, "blue", "red")
+
+```
+
+Representamos el HMM en nuestro caso, como se vio en los documentos presentados en clase:
+
+```{r}
+
+f <- ggplot()+
+  geom_step(data = subset(df_ggplot, df_ggplot$variable == "nameStock"), 
+            aes(Fecha, value)) +
+  geom_linerange(data = positivoColor, 
+                 aes(Fecha, value, ymin = 0, ymax = value),
+                 color = pColor) +
+  geom_linerange(data = subset(df_ggplot, df_ggplot$variable == "pBull"), 
+                 aes(Fecha, value, ymin=0, ymax=value),
+                 color="gold") +
+  facet_grid(variable ~., 
+             scales = "free", 
+             as.table = TRUE) + 
+  scale_x_date(date_breaks = "1 years",
+               date_labels = "%y") +
+  theme_bw() + 
+  theme(panel.spacing = unit(0, "lines"), axis.title.x = element_blank(),
+        axis.title.y = element_blank(),
+        strip.background = element_rect(colour = "black", fill = "white")) +
+  ggtitle("Gráfico de Estados")
+
+f 
+
+```
+
+```{r}
+
+f <- ggplot() +
+  geom_step(data = subset(df_ggplot, df_ggplot$variable == "nameStock"),
+            aes(Fecha, value)) +
+  geom_linerange(data = positivoColor, 
+                 aes(Fecha, value, ymin = 0, ymax = value),
+                 color = pColor) +
+  geom_linerange(data = subset(df_ggplot, df_ggplot$variable == "pBull"),
+                 aes(Fecha, value,ymin = 0, ymax = value), 
+                 color = "gold") +
+  geom_step(data = subset(df_ggplot, df_ggplot$variable == "pState"),
+            aes(Fecha, 2 - value),
+            color = "dodgerblue",
+            size = 1) +
+  facet_grid(variable ~., 
+             scales = "free", 
+             as.table = TRUE) +   
+  scale_x_date(date_breaks = "1 years", 
+               date_labels = "%y") +
+  theme_bw() + 
+  theme(panel.spacing = unit(0, "lines"), axis.title.x = element_blank(),
+        axis.title.y = element_blank(),
+        strip.background = element_rect(colour = "black", fill = "white")) +
+  ggtitle("Ciclos de BMW: Alcista vs Bajista") + 
+  labs(caption = "BMW Hidden Markov Model two states: rentabilidades quincenales")
+
+f 
+
+```
